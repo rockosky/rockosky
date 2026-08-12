@@ -138,8 +138,13 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
         pricing: { basePrice: { currency: 'USD', value: (priceCents / 100).toFixed(2) } },
         sku: `KF-${Date.now()}`
       }
-    ],
-    images: [{ url: imageUrl }]
+    ]
+    // NOTE: 'images' removed from here — Squarespace's Commerce API rejected
+    // it as an unknown/readonly field on product creation. Squarespace
+    // requires images to be attached in a separate follow-up step after
+    // the product exists, not in the initial create request. That
+    // follow-up call still needs to be built and tested — until then,
+    // products publish successfully but without a photo attached yet.
   };
 
   const createRes = await fetch('https://api.squarespace.com/1.0/commerce/products', {
