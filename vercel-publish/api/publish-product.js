@@ -132,11 +132,20 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     storePageId: storePageId,
     name: title,
     description: fullDescription,
+    isVisible: true,
     tags: [city, season, 'Ketchup Files'].concat(hashtagList),
     variants: [
       {
         pricing: { basePrice: { currency: 'USD', value: (priceCents / 100).toFixed(2) } },
-        sku: `KF-${Date.now()}`
+        sku: `KF-${Date.now()}`,
+        unlimited: false,
+        stock: 1
+        // One-of-one: each street style photo sells once, then shows as
+        // sold out / out of stock, rather than an unlimited download.
+        // Field names (unlimited/stock) are my best match to Squarespace's
+        // documented Commerce API pattern — unverified against a live
+        // response, so if stock tracking doesn't take effect, this is
+        // the first thing to check.
       }
     ]
     // NOTE: 'images' removed from here — Squarespace's Commerce API rejected
@@ -157,6 +166,22 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     throw new Error(`Squarespace product create failed: ${errText}`);
   }
   const product = await createRes.json();
+
+  // Safety net: some Squarespace fields (like we saw with 'images') are
+  // rejected at creation time and only settable via a follow-up update.
+  // If isVisible didn't take effect above, this explicit PATCH forces it.
+  // If this call itself errors, we don't fail the whole publish — the
+  // product already exists, this is just a best-effort visibility push.
+  try {
+    await fetch(`https://api.squarespace.com/1.0/commerce/products/${product.id}`, {
+      method: 'PATCH',
+      headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isVisible: true })
+    });
+  } catch (visibilityErr) {
+    console.error('Visibility follow-up failed (non-fatal):', visibilityErr);
+  }
+
   return { id: product.id, url: product.url || '' };
 }
 
