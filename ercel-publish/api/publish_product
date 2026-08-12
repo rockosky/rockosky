@@ -52,8 +52,12 @@ module.exports = async (req, res) => {
     // 2. Public image URL from Supabase Storage
     const imageUrl = `${SUPABASE_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
 
-    // 3. Find or create the store category ("Season") matching photo.season
-    const storePageId = await getOrCreateStorePage(photo.season);
+    // 3. Find or create the store category matching "City Fashion Week —
+    // Season" (e.g. "New York Fashion Week — SS27") so each city's fashion
+    // week gets its own collection instead of all cities sharing one
+    // season-only page.
+    const collectionName = `${photo.city} Fashion Week — ${photo.season}`;
+    const storePageId = await getOrCreateStorePage(collectionName);
 
     // 4. Create the digital product in Squarespace
     const product = await createSquarespaceProduct({
@@ -94,24 +98,24 @@ function supabaseHeaders() {
   };
 }
 
-// Looks up an existing store category/collection matching the season name,
+// Looks up an existing store category/collection matching the given name,
 // or creates one if it doesn't exist yet. Squarespace calls these
 // "Store Pages" or "Product Collections" depending on API version —
 // verify this endpoint against your Commerce Advanced API docs.
-async function getOrCreateStorePage(seasonName) {
+async function getOrCreateStorePage(collectionName) {
   const listRes = await fetch('https://api.squarespace.com/1.0/commerce/store_pages', {
     headers: squarespaceHeaders()
   });
   const list = await listRes.json();
   const existing = (list.storePages || []).find(
-    (p) => p.name && p.name.toLowerCase() === seasonName.toLowerCase()
+    (p) => p.name && p.name.toLowerCase() === collectionName.toLowerCase()
   );
   if (existing) return existing.id;
 
   const createRes = await fetch('https://api.squarespace.com/1.0/commerce/store_pages', {
     method: 'POST',
     headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: seasonName })
+    body: JSON.stringify({ name: collectionName })
   });
   const created = await createRes.json();
   return created.id;
