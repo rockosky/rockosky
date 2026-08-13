@@ -144,7 +144,14 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     + (socialUrl ? `\n\nProfile / Link: ${socialUrl}` : '');
 
   const body = {
-    type: 'DIGITAL',
+    type: 'PHYSICAL',
+    // Switched from 'DIGITAL' — Squarespace's API explicitly rejected
+    // that type for this create operation (METHOD_NOT_ALLOWED /
+    // OPERATION_NOT_ALLOWED_FOR_PRODUCT_TYPE). PHYSICAL works with this
+    // endpoint. Since these are licensed photo downloads, not shipped
+    // goods, this may need a shipping-related field added too if
+    // Squarespace's checkout starts asking buyers for a shipping
+    // address — that's the next thing to watch for once this succeeds.
     storePageId: storePageId,
     name: title,
     description: fullDescription,
