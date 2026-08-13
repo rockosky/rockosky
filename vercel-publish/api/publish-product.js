@@ -3,33 +3,48 @@
 // Called by the admin dashboard when Felipe hits "Approve & Publish".
 // 1. Loads the photo's saved details from Supabase (service role, bypasses RLS)
 // 2. Downloads the image from Supabase Storage
-// 3. Creates a PHYSICAL product in the Squarespace store via the Commerce API
-//    (assigns it to a category matching the "season" name), sets inventory,
-//    and UPLOADS the actual image file to Squarespace's own CDN — Squarespace
-//    does not accept an external image URL, it must own the file.
+// 3. Publishes it as a Squarespace product — see PRODUCT STRATEGY below
 // 4. Writes the resulting Squarespace product id/url back to Supabase, status -> 'published'
 //
-// CHANGE LOG (this version):
-// - FIXED: image was never attaching because Squarespace's API does not accept
-//   {images: [{url: ...}]} — that field is unknown/readonly and silently no-ops.
-//   Confirmed live: Squarespace serves product images from its own CDN
-//   (images.squarespace-cdn.com), meaning the file has to be uploaded to them,
-//   not referenced. New attachProductImage() downloads the photo from Supabase
-//   Storage, then POSTs it as multipart/form-data to Squarespace's dedicated
-//   product-images endpoint.
-// - FIXED: products were publishing as "out of stock". Inventory PATCH now
-//   fires with unlimited:true (these are licensed digital-style one-of-one
-//   photo sales, not shipped stock — unlimited avoids the whole stock-count
-//   problem entirely) and includes a short retry, in case the variant isn't
-//   indexed yet immediately after product creation.
-// - diagnostics string now returned in the API response AND written back to
-//   Supabase (photos.publish_diagnostics) so the admin dashboard can show
-//   exactly what happened on each publish, not just "Published!".
+// ============================================================
+// PRODUCT STRATEGY — why this isn't a plain "create a DIGITAL product" call
+// ============================================================
+// Confirmed live (see /api/test-digital-patch.js): Squarespace's Commerce
+// API refuses to CREATE a product with type DIGITAL — it 405s with
+// OPERATION_NOT_ALLOWED_FOR_PRODUCT_TYPE. Only PHYSICAL can be created
+// through that endpoint. What's NOT yet confirmed live is whether it will
+// let you PATCH/update a DIGITAL product that already exists.
+//
+// So this endpoint takes the approach that's actually possible today:
+//   1. Look for an unused DIGITAL product "template" already sitting in
+//      the store — one you create ONCE by hand in the Squarespace
+//      dashboard (type: Digital), tag with `kf-template-unused`, and
+//      leave hidden. This script finds one of those and PATCHes it with
+//      the real title/price/description/image/tags, then makes it
+//      visible — so the live listing is a genuine DIGITAL product, never
+//      created via the blocked endpoint, only ever edited.
+//   2. If no template is found (or patching one fails for any reason),
+//      it falls back to creating a PHYSICAL product the old way, so
+//      publishing never just breaks — it degrades instead of failing.
+//   3. Every step's real success/failure is collected in `diagnostics`
+//      and shown back in the admin dashboard, so it's obvious which path
+//      was taken and whether the image/inventory steps actually worked
+//      rather than silently guessing.
+//
+// TO USE THE DIGITAL PATH: in Squarespace, create one or more Digital
+// products by hand (any placeholder title/price is fine), tag each with
+// exactly `kf-template-unused`, and leave them hidden (isVisible: false).
+// This script consumes one template per publish and removes the tag once
+// used, so keep a small stock of them around (a handful is plenty since
+// they get reused... actually they're consumed, not reused — see note
+// below on making more).
+// ============================================================
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const SQUARESPACE_API_KEY = process.env.SQUARESPACE_API_KEY;
 const BUCKET = "Ketchup Files UPLOADS";
+const TEMPLATE_TAG = "kf-template-unused";
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -40,69 +55,6 @@ module.exports = async (req, res) => {
     res.status(204).end();
     return;
   }
-
-  // --- DIAGNOSTIC MODE (temporary) ---
-  // GET  /api/publish-product              -> lists products + their type,
-  //                                            so you can find a DIGITAL one's id
-  // GET  /api/publish-product?patchId=XYZ  -> tests whether Squarespace allows
-  //                                            PATCHing (editing) that product
-  // This does NOT touch the normal publish flow below (still POST-only,
-  // still triggered the same way from the admin dashboard).
-  if (req.method === 'GET') {
-    try {
-      const { patchId } = req.query || {};
-
-      if (!patchId) {
-        const listRes = await fetch('https://api.squarespace.com/1.0/commerce/products', {
-          headers: squarespaceHeaders()
-        });
-        const raw = await listRes.text();
-        if (!listRes.ok) {
-          res.status(200).json({ mode: 'list', ok: false, status: listRes.status, raw });
-          return;
-        }
-        const data = JSON.parse(raw);
-        const products = data.products || data.results || (Array.isArray(data) ? data : []);
-        const summary = products.map(p => ({ id: p.id, name: p.name, type: p.type, isVisible: p.isVisible, url: p.url }));
-        res.status(200).json({
-          mode: 'list',
-          ok: true,
-          count: summary.length,
-          digitalProducts: summary.filter(p => p.type === 'DIGITAL'),
-          allProducts: summary
-        });
-        return;
-      }
-
-      const testStamp = `[patch test ${new Date().toISOString()}]`;
-      const getRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${patchId}`, { headers: squarespaceHeaders() });
-      const getRaw = await getRes.text();
-      if (!getRes.ok) {
-        res.status(200).json({ mode: 'patch', step: 'fetch existing product', ok: false, status: getRes.status, raw: getRaw });
-        return;
-      }
-      const existing = JSON.parse(getRaw);
-      const patchRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${patchId}`, {
-        method: 'PATCH',
-        headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description: (existing.description || '') + '\n\n' + testStamp })
-      });
-      const patchRaw = await patchRes.text();
-      res.status(200).json({
-        mode: 'patch',
-        productId: patchId,
-        productType: existing.type,
-        testStampAppended: testStamp,
-        ok: patchRes.ok,
-        status: patchRes.status,
-        raw: patchRaw
-      });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-    return;
-  }
-
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
     return;
@@ -133,8 +85,8 @@ module.exports = async (req, res) => {
     // 3. Find the store collection matching this city + season
     const storePageId = await getOrCreateStorePage(photo.city, photo.season);
 
-    // 4. Create the product, upload its image, and fix inventory
-    const product = await createSquarespaceProduct({
+    // 4. Publish — DIGITAL-via-template first, PHYSICAL-create fallback second
+    const product = await publishProduct({
       title: photo.title,
       description: photo.description || '',
       priceCents: photo.price_cents,
@@ -154,12 +106,11 @@ module.exports = async (req, res) => {
         status: 'published',
         squarespace_product_id: product.id,
         squarespace_product_url: product.url,
-        publish_diagnostics: product.diagnostics,
         published_at: new Date().toISOString()
       })
     });
 
-    res.status(200).json({ ok: true, url: product.url, diagnostics: product.diagnostics });
+    res.status(200).json({ ok: true, url: product.url, productType: product.type, diagnostics: product.diagnostics });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -174,13 +125,13 @@ function supabaseHeaders() {
 }
 
 // Looks up an existing store page/collection whose name contains BOTH
-// the given city and season — flexible matching.
+// the given city and season, falling back to city-only if no exact
+// combined match is found.
 async function getOrCreateStorePage(city, season) {
   const listRes = await fetch('https://api.squarespace.com/1.0/commerce/store_pages', {
     headers: squarespaceHeaders()
   });
   const list = await listRes.json();
-
   const pages = list.storePages || list.pages || list.results || (Array.isArray(list) ? list : []);
 
   const cityLower = (city || '').toLowerCase().trim();
@@ -200,42 +151,117 @@ async function getOrCreateStorePage(city, season) {
 
   throw new Error(
     `No store page found containing both "${city}" and "${season}" in its name. ` +
-    `Available page names: ${pages.map(p => p && p.title).filter(Boolean).join(', ') || '(none found)'}. ` +
-    `RAW RESPONSE (to diagnose the actual shape): ${JSON.stringify(list).substring(0, 800)}`
+    `Available page names: ${pages.map(p => p && p.title).filter(Boolean).join(', ') || '(none found)'}.`
   );
 }
 
-async function createSquarespaceProduct({ title, description, priceCents, city, season, hashtags, socialUrl, storePageId, imageUrl }) {
-  var hashtagList = (hashtags || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean);
-  var fullDescription = description + `\n\nLocation: ${city} — ${season}`
-    + (hashtagList.length ? `\n\n${hashtagList.map(t => '#' + t.replace(/^#/, '')).join(' ')}` : '')
-    + (socialUrl ? `\n\nProfile / Link: ${socialUrl}` : '');
+// ---- Top-level publish flow: try DIGITAL-via-template, fall back to
+// PHYSICAL-create only if that's not possible right now. ----
+async function publishProduct(details) {
+  var diagnostics = [];
+
+  const template = await findDigitalTemplate();
+  if (template) {
+    diagnostics.push('Product type: attempting DIGITAL (patching template ' + template.id + ')');
+    try {
+      const patched = await patchDigitalTemplate(template, details, diagnostics);
+      diagnostics.push('Product type: DIGITAL — success');
+      return { id: patched.id, url: patched.url, type: 'DIGITAL', diagnostics: diagnostics.join(' | ') };
+    } catch (templateErr) {
+      diagnostics.push('DIGITAL template patch failed, falling back to PHYSICAL: ' + templateErr.message);
+    }
+  } else {
+    diagnostics.push('Product type: no unused DIGITAL template found (tag "' + TEMPLATE_TAG + '"), using PHYSICAL. ' +
+      'Create a hidden Digital product in Squarespace tagged "' + TEMPLATE_TAG + '" to enable true digital publishing.');
+  }
+
+  const created = await createPhysicalProduct(details, diagnostics);
+  return { id: created.id, url: created.url, type: 'PHYSICAL', diagnostics: diagnostics.join(' | ') };
+}
+
+// ---- Find one unused DIGITAL template product, tagged and hidden,
+// created by hand in the Squarespace dashboard ahead of time. ----
+async function findDigitalTemplate() {
+  const listRes = await fetch('https://api.squarespace.com/1.0/commerce/products', {
+    headers: squarespaceHeaders()
+  });
+  if (!listRes.ok) return null;
+  const data = await listRes.json();
+  const products = data.products || data.results || (Array.isArray(data) ? data : []);
+  const match = products.find((p) =>
+    p && p.type === 'DIGITAL' && Array.isArray(p.tags) && p.tags.includes(TEMPLATE_TAG)
+  );
+  return match || null;
+}
+
+// ---- Turn a blank DIGITAL template into the real listing via PUT.
+// (Confirmed live: PATCH gets a 405 "Method 'PATCH' is not supported"
+// on /1.0/commerce/products/{id} — Squarespace wants PUT for updates,
+// same as it does for the variant/price endpoint below.) ----
+async function patchDigitalTemplate(template, details, diagnostics) {
+  const fullDescription = buildDescription(details);
+  const remainingTags = (template.tags || []).filter(t => t !== TEMPLATE_TAG);
+  const newTags = remainingTags.concat([details.city, details.season, 'Ketchup Files']);
+
+  const patchBody = {
+    storePageId: details.storePageId,
+    name: details.title,
+    description: fullDescription,
+    isVisible: true,
+    tags: newTags
+  };
+
+  const patchRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${template.id}`, {
+    method: 'PUT',
+    headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(patchBody)
+  });
+  if (!patchRes.ok) {
+    const errText = await patchRes.text();
+    throw new Error('Base update failed: ' + errText.substring(0, 300));
+  }
+  const product = await patchRes.json();
+
+  // Price lives on the variant, not the product itself — update the
+  // template's existing variant rather than trying to replace the
+  // variants array wholesale (which some Commerce endpoints reject).
+  const variantId = product.variants && product.variants[0] && product.variants[0].id;
+  if (variantId) {
+    const priceRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${template.id}/variants/${variantId}`, {
+      method: 'PUT',
+      headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pricing: { basePrice: { currency: 'USD', value: (details.priceCents / 100).toFixed(2) } } })
+    });
+    diagnostics.push(priceRes.ok ? 'Price: OK' : 'Price: FAILED — ' + (await priceRes.text()).substring(0, 200));
+    await attemptSetInventory(variantId, diagnostics);
+  } else {
+    diagnostics.push('Price: skipped, template has no variant to update');
+  }
+
+  await attemptAttachImage(template.id, details.imageUrl, diagnostics);
+
+  return { id: product.id, url: product.url || template.url || '' };
+}
+
+// ---- Fallback: create a PHYSICAL product the way this always has, for
+// when no digital template is available yet. ----
+async function createPhysicalProduct(details, diagnostics) {
+  const fullDescription = buildDescription(details);
+  var hashtagList = (details.hashtags || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean);
 
   const body = {
     type: 'PHYSICAL',
-    // TEMPORARY: back to PHYSICAL so approvals stop failing outright.
-    // Squarespace blocks creating DIGITAL products via this API (confirmed
-    // twice, real 405 error). Once the ?patchId= diagnostic confirms
-    // whether EDITING an existing DIGITAL product is allowed, this gets
-    // replaced with a "find pre-made digital shell + PATCH it" flow
-    // instead of creating fresh each time. Until then, products publish
-    // and are purchasable, but do not deliver a digital file after payment.
-    storePageId: storePageId,
-    name: title,
+    storePageId: details.storePageId,
+    name: details.title,
     description: fullDescription,
     isVisible: true,
-    tags: [city, season, 'Ketchup Files'].concat(hashtagList),
+    tags: [details.city, details.season, 'Ketchup Files'].concat(hashtagList),
     variants: [
       {
-        pricing: { basePrice: { currency: 'USD', value: (priceCents / 100).toFixed(2) } },
+        pricing: { basePrice: { currency: 'USD', value: (details.priceCents / 100).toFixed(2) } },
         sku: `KF-${Date.now()}`
-        // 'stock' intentionally omitted here — rejected at create time
-        // regardless of type. Inventory is set via the dedicated
-        // Inventory endpoint below, after creation.
       }
     ]
-    // 'images' intentionally omitted — Squarespace rejects it on create.
-    // Image is uploaded separately below via attachProductImage().
   };
 
   const createRes = await fetch('https://api.squarespace.com/1.0/commerce/products', {
@@ -245,112 +271,94 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
   });
   if (!createRes.ok) {
     const errText = await createRes.text();
-    // Intentionally NOT truncated — this is the exact response body from
-    // Squarespace, needed in full to know whether DIGITAL was rejected
-    // for a platform reason (won't work at all via API) or a scope/
-    // permissions reason (API key needs "Digital Products" enabled).
-    throw new Error(`Squarespace product create failed [${createRes.status}]: ${errText}`);
+    throw new Error(`Squarespace product create failed: ${errText}`);
   }
   const product = await createRes.json();
-  var diagnostics = [];
 
-  // --- Inventory: set to unlimited so it never shows "out of stock" ---
   const variantId = product.variants && product.variants[0] && product.variants[0].id;
   if (variantId) {
-    let invOk = false;
-    let lastInvErr = '';
-    // Retry twice with a short delay — the variant may not be fully
-    // indexed immediately after product creation.
-    for (let attempt = 1; attempt <= 3 && !invOk; attempt++) {
-      if (attempt > 1) await sleep(1000 * attempt);
-      try {
-        const inventoryRes = await fetch('https://api.squarespace.com/1.0/commerce/inventory', {
-          method: 'PATCH',
-          headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            inventory: [{ variantId: variantId, unlimited: true }]
-          })
-        });
-        if (inventoryRes.ok) {
-          invOk = true;
-        } else {
-          lastInvErr = (await inventoryRes.text()).substring(0, 200);
-        }
-      } catch (e) {
-        lastInvErr = e.message;
-      }
-    }
-    diagnostics.push(invOk ? 'Inventory: OK (unlimited)' : `Inventory: FAILED after retries — ${lastInvErr}`);
+    await attemptSetInventory(variantId, diagnostics);
   } else {
     diagnostics.push('Inventory: skipped, no variant ID found');
   }
 
-  // --- Image: upload the actual file bytes to Squarespace's CDN ---
-  // Confirmed live that Squarespace serves product images from
-  // images.squarespace-cdn.com — an external URL reference is not
-  // accepted anywhere in the Products API. The file itself has to be
-  // uploaded via multipart/form-data to this dedicated endpoint.
-  try {
-    await attachProductImage(product.id, imageUrl);
-    diagnostics.push('Image: OK');
-  } catch (imgErr) {
-    diagnostics.push('Image: ' + imgErr.message);
-  }
+  await attemptAttachImage(product.id, details.imageUrl, diagnostics);
 
-  // isVisible is already true from create, but re-assert in case image
-  // upload triggered a draft state on Squarespace's side.
-  try {
-    const patchRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${product.id}`, {
-      method: 'PATCH',
-      headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isVisible: true })
-    });
-    if (!patchRes.ok) {
-      const patchErrText = await patchRes.text();
-      diagnostics.push('Visibility: ' + patchErrText.substring(0, 200));
+  return { id: product.id, url: product.url || '' };
+}
+
+function buildDescription(details) {
+  var hashtagList = (details.hashtags || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean);
+  return (details.description || '') + `\n\nLocation: ${details.city} — ${details.season}`
+    + (hashtagList.length ? `\n\n${hashtagList.map(t => '#' + t.replace(/^#/, '')).join(' ')}` : '')
+    + (details.socialUrl ? `\n\nProfile / Link: ${details.socialUrl}` : '');
+}
+
+// ---- Inventory: try "unlimited" first — appropriate for a licensed
+// digital photo, which isn't a physically limited good — then fall back
+// to a fixed quantity if the API rejects that shape. Confirmed live:
+// this endpoint 405s on PATCH ("Method 'PATCH' is not supported"), so
+// PUT is used instead. Every attempt is logged so it's clear which
+// shape (if any) actually worked. ----
+async function attemptSetInventory(variantId, diagnostics) {
+  const attempts = [
+    { label: 'unlimited', payload: { inventory: [{ variantId: variantId, unlimited: true }] } },
+    { label: 'quantity:20', payload: { inventory: [{ variantId: variantId, unlimited: false, quantity: 20 }] } }
+  ];
+  for (const attempt of attempts) {
+    try {
+      const invRes = await fetch('https://api.squarespace.com/1.0/commerce/inventory', {
+        method: 'PUT',
+        headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(attempt.payload)
+      });
+      if (invRes.ok) {
+        diagnostics.push('Inventory: OK (' + attempt.label + ')');
+        return;
+      }
+      const errText = await invRes.text();
+      diagnostics.push('Inventory (' + attempt.label + '): FAILED — ' + errText.substring(0, 150));
+    } catch (e) {
+      diagnostics.push('Inventory (' + attempt.label + '): FAILED — ' + e.message);
     }
-  } catch (patchErr) {
-    diagnostics.push('Visibility: ' + patchErr.message);
   }
 
-  return { id: product.id, url: product.url || '', diagnostics: diagnostics.join(' | ') };
 }
 
-// Downloads the photo from Supabase Storage and uploads it to Squarespace
-// as multipart/form-data, per their dedicated product-images endpoint.
-// This has NOT been confirmed against Squarespace's live API yet — the
-// exact field name Squarespace expects for the file part ('image' below)
-// and the exact response shape are best-guess from their documented
-// pattern for this endpoint as of early 2026. If this throws, the error
-// text captured here is what we need to correct the request shape.
-async function attachProductImage(productId, imageUrl) {
-  const imgRes = await fetch(imageUrl);
-  if (!imgRes.ok) {
-    throw new Error(`could not fetch source image from Supabase (${imgRes.status})`);
-  }
-  const arrayBuffer = await imgRes.arrayBuffer();
-  const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
-  const filename = (imageUrl.split('/').pop() || 'photo.jpg').split('?')[0];
+// ---- Image/thumbnail attach: confirmed live that this endpoint wants a
+// real file upload, not a JSON body referencing a URL — the earlier
+// {images:[{url}]} attempt got back "Expected exactly one file part
+// named 'file', but found none." So this downloads the actual image
+// bytes from Supabase Storage and POSTs them as multipart/form-data
+// with the field named 'file', which is what the error message says
+// it's looking for. ----
+async function attemptAttachImage(productId, imageUrl, diagnostics) {
+  try {
+    const imgRes = await fetch(imageUrl);
+    if (!imgRes.ok) {
+      diagnostics.push('Image: FAILED — could not download source image (' + imgRes.status + ')');
+      return;
+    }
+    const imgBlob = await imgRes.blob();
+    const fileName = imageUrl.split('/').pop() || 'photo.jpg';
 
-  const form = new FormData();
-  form.append('image', new Blob([arrayBuffer], { type: contentType }), filename);
+    const form = new FormData();
+    form.append('file', imgBlob, fileName);
 
-  const uploadRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${productId}/images`, {
-    method: 'POST',
-    headers: squarespaceHeaders(), // do NOT set Content-Type — FormData sets its own multipart boundary
-    body: form
-  });
-
-  if (!uploadRes.ok) {
+    const uploadRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${productId}/images`, {
+      method: 'POST',
+      headers: squarespaceHeaders(), // no Content-Type here — FormData sets its own multipart boundary
+      body: form
+    });
+    if (uploadRes.ok) {
+      diagnostics.push('Image: OK (multipart upload)');
+      return;
+    }
     const errText = await uploadRes.text();
-    throw new Error(`upload failed (${uploadRes.status}) — ${errText.substring(0, 300)}`);
+    diagnostics.push('Image: FAILED — ' + errText.substring(0, 200));
+  } catch (e) {
+    diagnostics.push('Image: FAILED — ' + e.message);
   }
-
-  return await uploadRes.json();
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function squarespaceHeaders() {
