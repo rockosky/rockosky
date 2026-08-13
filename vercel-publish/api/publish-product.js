@@ -206,7 +206,7 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
         method: 'PATCH',
         headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          inventory: [{ variantId: variantId, unlimited: true }]
+          inventory: [{ variantId: variantId, unlimited: false, quantity: 20 }]
         })
       });
       if (!inventoryRes.ok) {
