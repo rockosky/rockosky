@@ -149,11 +149,16 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     + (socialUrl ? `\n\nProfile / Link: ${socialUrl}` : '');
 
   const body = {
-    type: 'PHYSICAL',
-    // Squarespace rejects 'DIGITAL' for this create operation
-    // (METHOD_NOT_ALLOWED / OPERATION_NOT_ALLOWED_FOR_PRODUCT_TYPE).
-    // PHYSICAL works; inventory is set to unlimited below since these
-    // are licensed photo downloads, not shipped goods.
+    type: 'DIGITAL',
+    // Switched back to DIGITAL — this is what actually gives buyers a
+    // download after payment; PHYSICAL never delivers a file no matter
+    // how the rest of the product is configured. An earlier attempt at
+    // DIGITAL was rejected, but the exact error was never captured in
+    // full (only paraphrased), so it's untested whether that was a real
+    // platform limitation or just a missing "Digital Products" scope on
+    // the API key. If this call fails, the full raw response is thrown
+    // below (not truncated to a short summary) so the real cause is
+    // visible this time.
     storePageId: storePageId,
     name: title,
     description: fullDescription,
@@ -179,7 +184,11 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
   });
   if (!createRes.ok) {
     const errText = await createRes.text();
-    throw new Error(`Squarespace product create failed: ${errText}`);
+    // Intentionally NOT truncated — this is the exact response body from
+    // Squarespace, needed in full to know whether DIGITAL was rejected
+    // for a platform reason (won't work at all via API) or a scope/
+    // permissions reason (API key needs "Digital Products" enabled).
+    throw new Error(`Squarespace product create failed [${createRes.status}]: ${errText}`);
   }
   const product = await createRes.json();
   var diagnostics = [];
