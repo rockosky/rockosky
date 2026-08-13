@@ -98,27 +98,33 @@ function supabaseHeaders() {
   };
 }
 
-// Looks up an existing store category/collection matching the given name,
-// or creates one if it doesn't exist yet. Squarespace calls these
-// "Store Pages" or "Product Collections" depending on API version —
-// verify this endpoint against your Commerce Advanced API docs.
+// Looks up an existing store page/collection matching the given name.
+// Does NOT try to create one — that endpoint's exact shape was
+// unverified guesswork and was failing silently (returning no ID).
+// Instead, these collections need to be created once, manually, in
+// Squarespace ahead of time, and this just finds the matching one by
+// name. Throws a clear, actionable error if no match is found, instead
+// of silently passing along a missing/null storePageId.
 async function getOrCreateStorePage(collectionName) {
   const listRes = await fetch('https://api.squarespace.com/1.0/commerce/store_pages', {
     headers: squarespaceHeaders()
   });
   const list = await listRes.json();
-  const existing = (list.storePages || []).find(
-    (p) => p.name && p.name.toLowerCase() === collectionName.toLowerCase()
-  );
-  if (existing) return existing.id;
 
-  const createRes = await fetch('https://api.squarespace.com/1.0/commerce/store_pages', {
-    method: 'POST',
-    headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: collectionName })
-  });
-  const created = await createRes.json();
-  return created.id;
+  // Defensive: try a few plausible response shapes, since the exact key
+  // Squarespace uses here hasn't been confirmed live.
+  const pages = list.storePages || list.pages || list.results || (Array.isArray(list) ? list : []);
+
+  const existing = pages.find(
+    (p) => p && p.name && p.name.toLowerCase().trim() === collectionName.toLowerCase().trim()
+  );
+
+  if (existing && existing.id) return existing.id;
+
+  throw new Error(
+    `No store page found named "${collectionName}". Create it manually in Squarespace's Store section first, ` +
+    `using this exact name, then try approving again.`
+  );
 }
 
 async function createSquarespaceProduct({ title, description, priceCents, city, season, hashtags, socialUrl, storePageId, imageUrl }) {
