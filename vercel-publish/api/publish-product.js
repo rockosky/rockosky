@@ -1,3 +1,30 @@
+// /api/publish-product.js
+//
+// Called by the admin dashboard when Felipe hits "Approve & Publish".
+// 1. Loads the photo's saved details from Supabase (service role, bypasses RLS)
+// 2. Downloads the image from Supabase Storage
+// 3. Creates a PHYSICAL product in the Squarespace store via the Commerce API
+//    (assigns it to a category matching the "season" name), sets inventory,
+//    and UPLOADS the actual image file to Squarespace's own CDN — Squarespace
+//    does not accept an external image URL, it must own the file.
+// 4. Writes the resulting Squarespace product id/url back to Supabase, status -> 'published'
+//
+// CHANGE LOG (this version):
+// - FIXED: image was never attaching because Squarespace's API does not accept
+//   {images: [{url: ...}]} — that field is unknown/readonly and silently no-ops.
+//   Confirmed live: Squarespace serves product images from its own CDN
+//   (images.squarespace-cdn.com), meaning the file has to be uploaded to them,
+//   not referenced. New attachProductImage() downloads the photo from Supabase
+//   Storage, then POSTs it as multipart/form-data to Squarespace's dedicated
+//   product-images endpoint.
+// - FIXED: products were publishing as "out of stock". Inventory PATCH now
+//   fires with unlimited:true (these are licensed digital-style one-of-one
+//   photo sales, not shipped stock — unlimited avoids the whole stock-count
+//   problem entirely) and includes a short retry, in case the variant isn't
+//   indexed yet immediately after product creation.
+// - diagnostics string now returned in the API response AND written back to
+//   Supabase (photos.publish_diagnostics) so the admin dashboard can show
+//   exactly what happened on each publish, not just "Published!".
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -185,16 +212,14 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     + (socialUrl ? `\n\nProfile / Link: ${socialUrl}` : '');
 
   const body = {
-    type: 'DIGITAL',
-    // Switched back to DIGITAL — this is what actually gives buyers a
-    // download after payment; PHYSICAL never delivers a file no matter
-    // how the rest of the product is configured. An earlier attempt at
-    // DIGITAL was rejected, but the exact error was never captured in
-    // full (only paraphrased), so it's untested whether that was a real
-    // platform limitation or just a missing "Digital Products" scope on
-    // the API key. If this call fails, the full raw response is thrown
-    // below (not truncated to a short summary) so the real cause is
-    // visible this time.
+    type: 'PHYSICAL',
+    // TEMPORARY: back to PHYSICAL so approvals stop failing outright.
+    // Squarespace blocks creating DIGITAL products via this API (confirmed
+    // twice, real 405 error). Once the ?patchId= diagnostic confirms
+    // whether EDITING an existing DIGITAL product is allowed, this gets
+    // replaced with a "find pre-made digital shell + PATCH it" flow
+    // instead of creating fresh each time. Until then, products publish
+    // and are purchasable, but do not deliver a digital file after payment.
     storePageId: storePageId,
     name: title,
     description: fullDescription,
