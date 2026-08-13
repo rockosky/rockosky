@@ -137,16 +137,17 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     variants: [
       {
         pricing: { basePrice: { currency: 'USD', value: (priceCents / 100).toFixed(2) } },
-        sku: `KF-${Date.now()}`,
-        stock: "1"
-        // 'stock' as a string, not a raw number — Squarespace's pricing
-        // value is also sent as a string, so their API likely expects
-        // this the same way. If this specific type still doesn't match,
-        // the error will tell us the expected shape.
-        // 'unlimited' removed — Squarespace rejected it the same way it
-        // rejected 'images': unknown/readonly field on creation. 'stock'
-        // wasn't flagged in that error, so keeping it alone for now to
-        // see if it's accepted on its own.
+        sku: `KF-${Date.now()}`
+        // 'stock' removed for now — rejected as wrong type both as a
+        // number and a string, with the identical error either way.
+        // That pattern suggests 'stock' may not be a valid field at all
+        // for DIGITAL-type products (which are typically unlimited by
+        // nature) rather than a simple type mismatch. Getting core
+        // product creation working reliably first; one-of-one stock
+        // limiting is a separate follow-up to investigate — it may
+        // require a different Squarespace endpoint, a different field
+        // name specific to digital products, or switching product type
+        // away from DIGITAL entirely.
       }
     ]
     // NOTE: 'images' removed from here — Squarespace's Commerce API rejected
