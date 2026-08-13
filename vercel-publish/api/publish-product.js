@@ -40,6 +40,8 @@
 // below on making more).
 // ============================================================
 
+const crypto = require('crypto');
+
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const SQUARESPACE_API_KEY = process.env.SQUARESPACE_API_KEY;
@@ -296,14 +298,18 @@ function buildDescription(details) {
 
 // ---- Inventory: confirmed live that BOTH PATCH and PUT get a 405 on
 // /1.0/commerce/inventory directly — Squarespace's inventory API is
-// adjustment-based rather than a direct resource write, so this now
-// POSTs to the adjustments sub-resource instead. Two payload shapes are
-// tried since the exact field names aren't confirmed yet; each attempt
-// is logged so the next failure (if any) shows exactly what to correct.
-// Note: this step is non-fatal either way — approve/publish already
-// succeeds without it, and once a real DIGITAL template (see
-// findDigitalTemplate above) is in use instead of the PHYSICAL
-// fallback, digital goods may not need inventory tracking at all. ----
+// adjustment-based rather than a direct resource write, so this POSTs
+// to the adjustments sub-resource instead. That endpoint in turn
+// confirmed-live that it requires an Idempotency-Key header (400
+// "Required header 'Idempotency-Key' is not present" without one) —
+// a fresh random key is generated per attempt so retries with a
+// different payload shape aren't deduplicated against each other.
+// Two payload shapes are tried since the exact field names aren't
+// confirmed yet. Note: this step is non-fatal either way — approve/
+// publish already succeeds without it, and once a real DIGITAL
+// template (see findDigitalTemplate above) is in use instead of the
+// PHYSICAL fallback, digital goods may not need inventory tracking
+// at all. ----
 async function attemptSetInventory(variantId, diagnostics) {
   const attempts = [
     { label: 'incrementalAdjustments', payload: { incrementalAdjustments: [{ variantId: variantId, incrementalQuantity: 999 }] } },
@@ -313,7 +319,7 @@ async function attemptSetInventory(variantId, diagnostics) {
     try {
       const invRes = await fetch('https://api.squarespace.com/1.0/commerce/inventory/adjustments', {
         method: 'POST',
-        headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
+        headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
         body: JSON.stringify(attempt.payload)
       });
       if (invRes.ok) {
