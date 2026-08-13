@@ -1,30 +1,3 @@
-// /api/publish-product.js
-//
-// Called by the admin dashboard when Felipe hits "Approve & Publish".
-// 1. Loads the photo's saved details from Supabase (service role, bypasses RLS)
-// 2. Downloads the image from Supabase Storage
-// 3. Creates a PHYSICAL product in the Squarespace store via the Commerce API
-//    (assigns it to a category matching the "season" name), sets inventory,
-//    and UPLOADS the actual image file to Squarespace's own CDN — Squarespace
-//    does not accept an external image URL, it must own the file.
-// 4. Writes the resulting Squarespace product id/url back to Supabase, status -> 'published'
-//
-// CHANGE LOG (this version):
-// - FIXED: image was never attaching because Squarespace's API does not accept
-//   {images: [{url: ...}]} — that field is unknown/readonly and silently no-ops.
-//   Confirmed live: Squarespace serves product images from its own CDN
-//   (images.squarespace-cdn.com), meaning the file has to be uploaded to them,
-//   not referenced. New attachProductImage() downloads the photo from Supabase
-//   Storage, then POSTs it as multipart/form-data to Squarespace's dedicated
-//   product-images endpoint.
-// - FIXED: products were publishing as "out of stock". Inventory PATCH now
-//   fires with unlimited:true (these are licensed digital-style one-of-one
-//   photo sales, not shipped stock — unlimited avoids the whole stock-count
-//   problem entirely) and includes a short retry, in case the variant isn't
-//   indexed yet immediately after product creation.
-// - diagnostics string now returned in the API response AND written back to
-//   Supabase (photos.publish_diagnostics) so the admin dashboard can show
-//   exactly what happened on each publish, not just "Published!".
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -40,6 +13,69 @@ module.exports = async (req, res) => {
     res.status(204).end();
     return;
   }
+
+  // --- DIAGNOSTIC MODE (temporary) ---
+  // GET  /api/publish-product              -> lists products + their type,
+  //                                            so you can find a DIGITAL one's id
+  // GET  /api/publish-product?patchId=XYZ  -> tests whether Squarespace allows
+  //                                            PATCHing (editing) that product
+  // This does NOT touch the normal publish flow below (still POST-only,
+  // still triggered the same way from the admin dashboard).
+  if (req.method === 'GET') {
+    try {
+      const { patchId } = req.query || {};
+
+      if (!patchId) {
+        const listRes = await fetch('https://api.squarespace.com/1.0/commerce/products', {
+          headers: squarespaceHeaders()
+        });
+        const raw = await listRes.text();
+        if (!listRes.ok) {
+          res.status(200).json({ mode: 'list', ok: false, status: listRes.status, raw });
+          return;
+        }
+        const data = JSON.parse(raw);
+        const products = data.products || data.results || (Array.isArray(data) ? data : []);
+        const summary = products.map(p => ({ id: p.id, name: p.name, type: p.type, isVisible: p.isVisible, url: p.url }));
+        res.status(200).json({
+          mode: 'list',
+          ok: true,
+          count: summary.length,
+          digitalProducts: summary.filter(p => p.type === 'DIGITAL'),
+          allProducts: summary
+        });
+        return;
+      }
+
+      const testStamp = `[patch test ${new Date().toISOString()}]`;
+      const getRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${patchId}`, { headers: squarespaceHeaders() });
+      const getRaw = await getRes.text();
+      if (!getRes.ok) {
+        res.status(200).json({ mode: 'patch', step: 'fetch existing product', ok: false, status: getRes.status, raw: getRaw });
+        return;
+      }
+      const existing = JSON.parse(getRaw);
+      const patchRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${patchId}`, {
+        method: 'PATCH',
+        headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: (existing.description || '') + '\n\n' + testStamp })
+      });
+      const patchRaw = await patchRes.text();
+      res.status(200).json({
+        mode: 'patch',
+        productId: patchId,
+        productType: existing.type,
+        testStampAppended: testStamp,
+        ok: patchRes.ok,
+        status: patchRes.status,
+        raw: patchRaw
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+    return;
+  }
+
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
     return;
