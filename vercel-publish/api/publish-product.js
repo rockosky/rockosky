@@ -192,14 +192,13 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
   }
   const product = await createRes.json();
 
-  // Set stock to 1 via a dedicated Inventory follow-up call — PHYSICAL
-  // products appear to default stock to 0 (out of stock) when not set
-  // at creation, and 'stock' was rejected as a field inside the variant
-  // object itself. This is why an Inventory-scoped API key was needed
-  // separately from Products — Squarespace likely tracks stock through
-  // its own endpoint rather than through the product/variant body.
-  // Best-guess endpoint shape, non-fatal if wrong — check Vercel logs
-  // for 'Inventory update failed' if stock still shows 0 after this.
+  // Set stock to unlimited via a dedicated Inventory follow-up call —
+  // PHYSICAL products appear to default stock to 0 (out of stock) when
+  // not set at creation. This is why an Inventory-scoped API key was
+  // needed separately from Products — Squarespace likely tracks stock
+  // through its own endpoint rather than through the product/variant
+  // body. Best-guess endpoint shape, non-fatal if wrong — check Vercel
+  // logs for 'Inventory update failed' if stock still shows 0 after this.
   try {
     const variantId = product.variants && product.variants[0] && product.variants[0].id;
     if (variantId) {
@@ -207,7 +206,7 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
         method: 'PATCH',
         headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          inventory: [{ variantId: variantId, quantity: 1 }]
+          inventory: [{ variantId: variantId, unlimited: true }]
         })
       });
       if (!inventoryRes.ok) {
