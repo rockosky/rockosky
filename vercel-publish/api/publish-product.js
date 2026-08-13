@@ -52,12 +52,11 @@ module.exports = async (req, res) => {
     // 2. Public image URL from Supabase Storage
     const imageUrl = `${SUPABASE_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
 
-    // 3. Find or create the store category matching "City Fashion Week —
-    // Season" (e.g. "New York Fashion Week — SS27") so each city's fashion
-    // week gets its own collection instead of all cities sharing one
-    // season-only page.
-    const collectionName = `${photo.city} Fashion Week — ${photo.season}`;
-    const storePageId = await getOrCreateStorePage(collectionName);
+    // 3. Find the store collection matching this city + season, however
+    // it happens to be named — matching flexibly on whether the page
+    // name contains both the city and season, rather than requiring an
+    // exact "City Fashion Week — Season" string.
+    const storePageId = await getOrCreateStorePage(photo.city, photo.season);
 
     // 4. Create the digital product in Squarespace
     const product = await createSquarespaceProduct({
@@ -98,14 +97,12 @@ function supabaseHeaders() {
   };
 }
 
-// Looks up an existing store page/collection matching the given name.
-// Does NOT try to create one — that endpoint's exact shape was
-// unverified guesswork and was failing silently (returning no ID).
-// Instead, these collections need to be created once, manually, in
-// Squarespace ahead of time, and this just finds the matching one by
-// name. Throws a clear, actionable error if no match is found, instead
-// of silently passing along a missing/null storePageId.
-async function getOrCreateStorePage(collectionName) {
+// Looks up an existing store page/collection whose name contains BOTH
+// the given city and season — flexible matching, since the exact
+// wording/format of the collection name in Squarespace may not match
+// any single guessed format exactly (e.g. "New York Fashion Week —
+// SS27" vs "New York Fashion Week 2026" vs other variations).
+async function getOrCreateStorePage(city, season) {
   const listRes = await fetch('https://api.squarespace.com/1.0/commerce/store_pages', {
     headers: squarespaceHeaders()
   });
@@ -115,15 +112,28 @@ async function getOrCreateStorePage(collectionName) {
   // Squarespace uses here hasn't been confirmed live.
   const pages = list.storePages || list.pages || list.results || (Array.isArray(list) ? list : []);
 
-  const existing = pages.find(
-    (p) => p && p.name && p.name.toLowerCase().trim() === collectionName.toLowerCase().trim()
-  );
+  const cityLower = (city || '').toLowerCase().trim();
+  const seasonLower = (season || '').toLowerCase().trim();
+
+  // Try matching both city and season first (most precise)
+  var existing = pages.find((p) => {
+    if (!p || !p.name) return false;
+    const nameLower = p.name.toLowerCase();
+    return nameLower.includes(cityLower) && (seasonLower ? nameLower.includes(seasonLower) : true);
+  });
+
+  // Fall back to matching city alone — handles cases where the season
+  // was named differently than expected (e.g. "2026" vs "SS27")
+  if (!existing) {
+    existing = pages.find((p) => p && p.name && p.name.toLowerCase().includes(cityLower));
+  }
 
   if (existing && existing.id) return existing.id;
 
   throw new Error(
-    `No store page found named "${collectionName}". Create it manually in Squarespace's Store section first, ` +
-    `using this exact name, then try approving again.`
+    `No store page found containing both "${city}" and "${season}" in its name. ` +
+    `Create a collection in Squarespace's Store section with a name that includes both, then try approving again. ` +
+    `Available page names: ${pages.map(p => p && p.name).filter(Boolean).join(', ') || '(none found — check the store_pages response shape)'}`
   );
 }
 
