@@ -294,21 +294,25 @@ function buildDescription(details) {
     + (details.socialUrl ? `\n\nProfile / Link: ${details.socialUrl}` : '');
 }
 
-// ---- Inventory: try "unlimited" first — appropriate for a licensed
-// digital photo, which isn't a physically limited good — then fall back
-// to a fixed quantity if the API rejects that shape. Confirmed live:
-// this endpoint 405s on PATCH ("Method 'PATCH' is not supported"), so
-// PUT is used instead. Every attempt is logged so it's clear which
-// shape (if any) actually worked. ----
+// ---- Inventory: confirmed live that BOTH PATCH and PUT get a 405 on
+// /1.0/commerce/inventory directly — Squarespace's inventory API is
+// adjustment-based rather than a direct resource write, so this now
+// POSTs to the adjustments sub-resource instead. Two payload shapes are
+// tried since the exact field names aren't confirmed yet; each attempt
+// is logged so the next failure (if any) shows exactly what to correct.
+// Note: this step is non-fatal either way — approve/publish already
+// succeeds without it, and once a real DIGITAL template (see
+// findDigitalTemplate above) is in use instead of the PHYSICAL
+// fallback, digital goods may not need inventory tracking at all. ----
 async function attemptSetInventory(variantId, diagnostics) {
   const attempts = [
-    { label: 'unlimited', payload: { inventory: [{ variantId: variantId, unlimited: true }] } },
-    { label: 'quantity:20', payload: { inventory: [{ variantId: variantId, unlimited: false, quantity: 20 }] } }
+    { label: 'incrementalAdjustments', payload: { incrementalAdjustments: [{ variantId: variantId, incrementalQuantity: 999 }] } },
+    { label: 'adjustments', payload: { adjustments: [{ variantId: variantId, quantity: 999 }] } }
   ];
   for (const attempt of attempts) {
     try {
-      const invRes = await fetch('https://api.squarespace.com/1.0/commerce/inventory', {
-        method: 'PUT',
+      const invRes = await fetch('https://api.squarespace.com/1.0/commerce/inventory/adjustments', {
+        method: 'POST',
         headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify(attempt.payload)
       });
