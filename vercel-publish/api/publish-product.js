@@ -204,7 +204,7 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     const variantId = product.variants && product.variants[0] && product.variants[0].id;
     if (variantId) {
       const inventoryRes = await fetch('https://api.squarespace.com/1.0/commerce/inventory', {
-        method: 'PUT',
+        method: 'PATCH',
         headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({
           inventory: [{ variantId: variantId, quantity: 1 }]
@@ -221,49 +221,30 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     console.error('Inventory update failed (non-fatal):', inventoryErr);
   }
 
-  // Safety net: some Squarespace fields (like we saw with 'images') are
-  // rejected at creation time and only settable via a follow-up update.
-  // If isVisible didn't take effect above, this explicit PATCH forces it.
-  // If this call itself errors, we don't fail the whole publish — the
-  // product already exists, this is just a best-effort visibility push.
+  // Attach the photo AND set isVisible in the same call, through the
+  // PATCH endpoint we already know works (used successfully for
+  // isVisible on its own). The 'images' field was rejected at product
+  // CREATE time specifically — but that error said "unknown or readonly
+  // field on creation", which could mean it's only writable through an
+  // update afterward, not that the field name/format itself is wrong.
+  // This tests that theory using a real, confirmed-working endpoint
+  // instead of the guessed /images sub-path, which returned an
+  // infrastructure-level error suggesting it doesn't exist at all.
   try {
-    await fetch(`https://api.squarespace.com/1.0/commerce/products/${product.id}`, {
+    const patchRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${product.id}`, {
       method: 'PATCH',
       headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isVisible: true })
+      body: JSON.stringify({
+        isVisible: true,
+        images: [{ url: imageUrl }]
+      })
     });
-  } catch (visibilityErr) {
-    console.error('Visibility follow-up failed (non-fatal):', visibilityErr);
-  }
-
-  // Attach the photo itself. This is unverified against Squarespace's
-  // real API — best-guess endpoint/shape based on common commerce API
-  // patterns (upload actual image bytes to a per-product images
-  // endpoint, since passing a bare URL was rejected at creation time).
-  // Non-fatal if it fails: the product still exists and is purchasable,
-  // it just won't have a photo yet until this call's real shape is
-  // confirmed and fixed from whatever error it throws.
-  try {
-    const imageFetchRes = await fetch(imageUrl);
-    const imageBuffer = await imageFetchRes.arrayBuffer();
-    const imageContentType = imageFetchRes.headers.get('content-type') || 'image/png';
-
-    const imageUploadRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${product.id}/images`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${SQUARESPACE_API_KEY}`,
-        'User-Agent': 'KetchupFiles-Publisher/1.0',
-        'Content-Type': imageContentType
-      },
-      body: Buffer.from(imageBuffer)
-    });
-
-    if (!imageUploadRes.ok) {
-      const imgErrText = await imageUploadRes.text();
-      console.error('Image attach failed (non-fatal):', imgErrText);
+    if (!patchRes.ok) {
+      const patchErrText = await patchRes.text();
+      console.error('Image/visibility PATCH failed (non-fatal):', patchErrText);
     }
-  } catch (imageErr) {
-    console.error('Image attach failed (non-fatal):', imageErr);
+  } catch (patchErr) {
+    console.error('Image/visibility PATCH failed (non-fatal):', patchErr);
   }
 
   return { id: product.id, url: product.url || '' };
