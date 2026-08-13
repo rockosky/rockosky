@@ -117,22 +117,22 @@ async function getOrCreateStorePage(city, season) {
 
   // Try matching both city and season first (most precise)
   var existing = pages.find((p) => {
-    if (!p || !p.name) return false;
-    const nameLower = p.name.toLowerCase();
+    if (!p || !p.title) return false;
+    const nameLower = p.title.toLowerCase();
     return nameLower.includes(cityLower) && (seasonLower ? nameLower.includes(seasonLower) : true);
   });
 
   // Fall back to matching city alone — handles cases where the season
   // was named differently than expected (e.g. "2026" vs "SS27")
   if (!existing) {
-    existing = pages.find((p) => p && p.name && p.name.toLowerCase().includes(cityLower));
+    existing = pages.find((p) => p && p.title && p.title.toLowerCase().includes(cityLower));
   }
 
   if (existing && existing.id) return existing.id;
 
   throw new Error(
     `No store page found containing both "${city}" and "${season}" in its name. ` +
-    `Available page names: ${pages.map(p => p && p.name).filter(Boolean).join(', ') || '(none found)'}. ` +
+    `Available page names: ${pages.map(p => p && p.title).filter(Boolean).join(', ') || '(none found)'}. ` +
     `RAW RESPONSE (to diagnose the actual shape): ${JSON.stringify(list).substring(0, 800)}`
   );
 }
