@@ -207,6 +207,36 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     console.error('Visibility follow-up failed (non-fatal):', visibilityErr);
   }
 
+  // Attach the photo itself. This is unverified against Squarespace's
+  // real API — best-guess endpoint/shape based on common commerce API
+  // patterns (upload actual image bytes to a per-product images
+  // endpoint, since passing a bare URL was rejected at creation time).
+  // Non-fatal if it fails: the product still exists and is purchasable,
+  // it just won't have a photo yet until this call's real shape is
+  // confirmed and fixed from whatever error it throws.
+  try {
+    const imageFetchRes = await fetch(imageUrl);
+    const imageBuffer = await imageFetchRes.arrayBuffer();
+    const imageContentType = imageFetchRes.headers.get('content-type') || 'image/png';
+
+    const imageUploadRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${product.id}/images`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${SQUARESPACE_API_KEY}`,
+        'User-Agent': 'KetchupFiles-Publisher/1.0',
+        'Content-Type': imageContentType
+      },
+      body: Buffer.from(imageBuffer)
+    });
+
+    if (!imageUploadRes.ok) {
+      const imgErrText = await imageUploadRes.text();
+      console.error('Image attach failed (non-fatal):', imgErrText);
+    }
+  } catch (imageErr) {
+    console.error('Image attach failed (non-fatal):', imageErr);
+  }
+
   return { id: product.id, url: product.url || '' };
 }
 
