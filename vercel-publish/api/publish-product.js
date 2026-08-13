@@ -132,8 +132,8 @@ async function getOrCreateStorePage(city, season) {
 
   throw new Error(
     `No store page found containing both "${city}" and "${season}" in its name. ` +
-    `Create a collection in Squarespace's Store section with a name that includes both, then try approving again. ` +
-    `Available page names: ${pages.map(p => p && p.name).filter(Boolean).join(', ') || '(none found — check the store_pages response shape)'}`
+    `Available page names: ${pages.map(p => p && p.name).filter(Boolean).join(', ') || '(none found)'}. ` +
+    `RAW RESPONSE (to diagnose the actual shape): ${JSON.stringify(list).substring(0, 800)}`
   );
 }
 
