@@ -83,7 +83,7 @@ module.exports = async (req, res) => {
       })
     });
 
-    res.status(200).json({ ok: true, url: product.url });
+    res.status(200).json({ ok: true, url: product.url, diagnostics: product.diagnostics });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -191,14 +191,14 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     throw new Error(`Squarespace product create failed: ${errText}`);
   }
   const product = await createRes.json();
+  var diagnostics = [];
 
   // Set stock to unlimited via a dedicated Inventory follow-up call —
   // PHYSICAL products appear to default stock to 0 (out of stock) when
   // not set at creation. This is why an Inventory-scoped API key was
   // needed separately from Products — Squarespace likely tracks stock
   // through its own endpoint rather than through the product/variant
-  // body. Best-guess endpoint shape, non-fatal if wrong — check Vercel
-  // logs for 'Inventory update failed' if stock still shows 0 after this.
+  // body. Best-guess endpoint shape, non-fatal if wrong.
   try {
     const variantId = product.variants && product.variants[0] && product.variants[0].id;
     if (variantId) {
@@ -211,13 +211,15 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
       });
       if (!inventoryRes.ok) {
         const invErrText = await inventoryRes.text();
-        console.error('Inventory update failed (non-fatal):', invErrText);
+        diagnostics.push('Inventory: ' + invErrText.substring(0, 200));
+      } else {
+        diagnostics.push('Inventory: OK');
       }
     } else {
-      console.error('Inventory update skipped: no variant ID found on created product');
+      diagnostics.push('Inventory: skipped, no variant ID found');
     }
   } catch (inventoryErr) {
-    console.error('Inventory update failed (non-fatal):', inventoryErr);
+    diagnostics.push('Inventory: ' + inventoryErr.message);
   }
 
   // Attach the photo AND set isVisible in the same call, through the
@@ -226,9 +228,6 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
   // CREATE time specifically — but that error said "unknown or readonly
   // field on creation", which could mean it's only writable through an
   // update afterward, not that the field name/format itself is wrong.
-  // This tests that theory using a real, confirmed-working endpoint
-  // instead of the guessed /images sub-path, which returned an
-  // infrastructure-level error suggesting it doesn't exist at all.
   try {
     const patchRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${product.id}`, {
       method: 'PATCH',
@@ -240,13 +239,15 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     });
     if (!patchRes.ok) {
       const patchErrText = await patchRes.text();
-      console.error('Image/visibility PATCH failed (non-fatal):', patchErrText);
+      diagnostics.push('Image: ' + patchErrText.substring(0, 200));
+    } else {
+      diagnostics.push('Image: OK');
     }
   } catch (patchErr) {
-    console.error('Image/visibility PATCH failed (non-fatal):', patchErr);
+    diagnostics.push('Image: ' + patchErr.message);
   }
 
-  return { id: product.id, url: product.url || '' };
+  return { id: product.id, url: product.url || '', diagnostics: diagnostics.join(' | ') };
 }
 
 function squarespaceHeaders() {
