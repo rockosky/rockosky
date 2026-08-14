@@ -235,7 +235,13 @@ async function patchDigitalTemplate(template, details, diagnostics) {
       body: JSON.stringify({ pricing: { basePrice: { currency: 'USD', value: (details.priceCents / 100).toFixed(2) } } })
     });
     diagnostics.push(priceRes.ok ? 'Price: OK' : 'Price: FAILED — ' + (await priceRes.text()).substring(0, 200));
-    await attemptSetStock(template.id, variantId, diagnostics);
+    // Deliberately NOT calling attemptSetStock here. If you set this
+    // template's variant to unlimited stock once by hand in Squarespace
+    // before it's ever used, this code should never touch that setting
+    // again — only title/description/price/image get patched per use.
+    // Touching stock here would risk a guessed API call silently
+    // overwriting your manual "unlimited" with some wrong quantity.
+    diagnostics.push('Inventory: not touched — set unlimited stock once by hand on this template in Squarespace and it\'ll stay that way for every future publish');
   } else {
     diagnostics.push('Price: skipped, template has no variant to update');
   }
