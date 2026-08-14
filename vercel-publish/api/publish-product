@@ -214,7 +214,7 @@ async function publishProduct(details) {
 async function findDigitalTemplate() {
   let cursor = null;
   let pagesChecked = 0;
-  const MAX_PAGES = 20; // safety cap — a few thousand products' worth
+  const MAX_PAGES = 5; // each page is a full network round-trip — keep this low enough that searching never becomes the reason the whole request times out
 
   while (pagesChecked < MAX_PAGES) {
     const url = new URL('https://api.squarespace.com/1.0/commerce/products');
@@ -505,3 +505,14 @@ function squarespaceHeaders() {
     'User-Agent': 'KetchupFiles-Publisher/1.0'
   };
 }
+
+// Explicitly request a longer execution window. Vercel functions default
+// to a short timeout (as low as 10-15s) regardless of plan tier unless a
+// file requests more — this flow makes several sequential calls to
+// Squarespace and Supabase in one request (product create/update, price,
+// image upload, digital file upload, inventory attempts), which can add
+// up past the default before ever hitting a real error. 60s gives real
+// headroom without reserving the full 300s Pro allows. This has to come
+// AFTER module.exports is assigned the handler function above, or it
+// gets wiped out by that assignment.
+module.exports.config = { maxDuration: 60 };
