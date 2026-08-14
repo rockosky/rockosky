@@ -235,7 +235,7 @@ async function patchDigitalTemplate(template, details, diagnostics) {
       body: JSON.stringify({ pricing: { basePrice: { currency: 'USD', value: (details.priceCents / 100).toFixed(2) } } })
     });
     diagnostics.push(priceRes.ok ? 'Price: OK' : 'Price: FAILED — ' + (await priceRes.text()).substring(0, 200));
-    await attemptSetInventory(variantId, diagnostics);
+    await attemptSetStock(template.id, variantId, diagnostics);
   } else {
     diagnostics.push('Price: skipped, template has no variant to update');
   }
@@ -261,7 +261,8 @@ async function createPhysicalProduct(details, diagnostics) {
     variants: [
       {
         pricing: { basePrice: { currency: 'USD', value: (details.priceCents / 100).toFixed(2) } },
-        sku: `KF-${Date.now()}`
+        sku: `KF-${Date.now()}`,
+        unlimited: true
       }
     ]
   };
@@ -279,7 +280,11 @@ async function createPhysicalProduct(details, diagnostics) {
 
   const variantId = product.variants && product.variants[0] && product.variants[0].id;
   if (variantId) {
-    await attemptSetInventory(variantId, diagnostics);
+    const createdUnlimited = product.variants[0].unlimited === true;
+    diagnostics.push(createdUnlimited
+      ? 'Inventory: OK (unlimited set at creation)'
+      : 'Inventory: "unlimited" at creation didn\'t stick, trying variant update…');
+    if (!createdUnlimited) await attemptSetStock(product.id, variantId, diagnostics);
   } else {
     diagnostics.push('Inventory: skipped, no variant ID found');
   }
@@ -296,40 +301,58 @@ function buildDescription(details) {
     + (details.socialUrl ? `\n\nProfile / Link: ${details.socialUrl}` : '');
 }
 
-// ---- Inventory: confirmed live that PATCH, PUT, and two wrapped-object
-// POST shapes ({incrementalAdjustments:[...]}, {adjustments:[...]}) are
-// ALL rejected — the last two specifically as "unknown or readonly
-// fields", meaning the wrapper key itself is wrong, not just field names
-// inside it. Trying one more plausible shape (a bare array body, no
-// wrapper) since that's a common REST pattern for adjustment endpoints.
-// This is the last automated guess — past this point, guessing further
-// without the actual API docs has a low hit rate and just burns
-// diagnostic space. If this also fails, treat inventory as a manual
-// step in the Squarespace dashboard for now; it never blocks publishing
-// either way, and may be moot entirely once real DIGITAL products
-// (rather than the PHYSICAL fallback) are in use. ----
-async function attemptSetInventory(variantId, diagnostics) {
-  const attempts = [
-    { label: 'bare array', payload: [{ variantId: variantId, quantity: 999 }] }
+// ---- Stock: confirmed live this screenshot's actual symptom — a
+// created product landed with 0 stock ("Agotado"/Sold Out), meaning
+// "unlimited: true" at creation time (tried above) may not have stuck.
+// Rather than keep guessing at the separate /inventory/adjustments
+// endpoint (which rejected 4 different shapes across PATCH/PUT/POST),
+// this tries the SAME variant PUT endpoint that's confirmed working for
+// price — since that call already succeeds, adding stock fields to it
+// is a much better bet than a different endpoint that's failed every
+// time so far. Falls back to the adjustments endpoint only as a last
+// resort. Non-fatal either way, but note this one actually matters:
+// 0 stock blocks real sales, unlike the earlier failures which didn't. ----
+async function attemptSetStock(productId, variantId, diagnostics) {
+  const variantAttempts = [
+    { label: 'variant PUT unlimited', payload: { unlimited: true } },
+    { label: 'variant PUT stock.unlimited', payload: { stock: { unlimited: true } } },
+    { label: 'variant PUT stock.quantity', payload: { stock: { quantity: 999, unlimited: false } } }
   ];
-  for (const attempt of attempts) {
+  for (const attempt of variantAttempts) {
     try {
-      const invRes = await fetch('https://api.squarespace.com/1.0/commerce/inventory/adjustments', {
-        method: 'POST',
-        headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      const res = await fetch(`https://api.squarespace.com/1.0/commerce/products/${productId}/variants/${variantId}`, {
+        method: 'PUT',
+        headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify(attempt.payload)
       });
-      if (invRes.ok) {
+      if (res.ok) {
         diagnostics.push('Inventory: OK (' + attempt.label + ')');
         return;
       }
-      const errText = await invRes.text();
+      const errText = await res.text();
       diagnostics.push('Inventory (' + attempt.label + '): FAILED — ' + errText.substring(0, 150));
     } catch (e) {
       diagnostics.push('Inventory (' + attempt.label + '): FAILED — ' + e.message);
     }
   }
-  diagnostics.push('Inventory: skipping further automated attempts — set manually in Squarespace for now, doesn\'t block publishing');
+
+  // Last resort: the separate adjustments endpoint, in case it turns out
+  // to need an idempotency key AND a shape none of the above guessed.
+  try {
+    const invRes = await fetch('https://api.squarespace.com/1.0/commerce/inventory/adjustments', {
+      method: 'POST',
+      headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify([{ variantId: variantId, quantity: 999 }])
+    });
+    if (invRes.ok) {
+      diagnostics.push('Inventory: OK (adjustments endpoint, bare array)');
+      return;
+    }
+    diagnostics.push('Inventory (adjustments endpoint): FAILED — ' + (await invRes.text()).substring(0, 150));
+  } catch (e) {
+    diagnostics.push('Inventory (adjustments endpoint): FAILED — ' + e.message);
+  }
+  diagnostics.push('Inventory: all automated attempts failed — until this is confirmed working, check "Continue selling when out of stock" in this product\'s Squarespace inventory settings as an immediate workaround so it isn\'t stuck showing Sold Out.');
 }
 
 // ---- Image/thumbnail attach: confirmed live that this endpoint wants a
