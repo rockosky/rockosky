@@ -296,24 +296,21 @@ function buildDescription(details) {
     + (details.socialUrl ? `\n\nProfile / Link: ${details.socialUrl}` : '');
 }
 
-// ---- Inventory: confirmed live that BOTH PATCH and PUT get a 405 on
-// /1.0/commerce/inventory directly — Squarespace's inventory API is
-// adjustment-based rather than a direct resource write, so this POSTs
-// to the adjustments sub-resource instead. That endpoint in turn
-// confirmed-live that it requires an Idempotency-Key header (400
-// "Required header 'Idempotency-Key' is not present" without one) —
-// a fresh random key is generated per attempt so retries with a
-// different payload shape aren't deduplicated against each other.
-// Two payload shapes are tried since the exact field names aren't
-// confirmed yet. Note: this step is non-fatal either way — approve/
-// publish already succeeds without it, and once a real DIGITAL
-// template (see findDigitalTemplate above) is in use instead of the
-// PHYSICAL fallback, digital goods may not need inventory tracking
-// at all. ----
+// ---- Inventory: confirmed live that PATCH, PUT, and two wrapped-object
+// POST shapes ({incrementalAdjustments:[...]}, {adjustments:[...]}) are
+// ALL rejected — the last two specifically as "unknown or readonly
+// fields", meaning the wrapper key itself is wrong, not just field names
+// inside it. Trying one more plausible shape (a bare array body, no
+// wrapper) since that's a common REST pattern for adjustment endpoints.
+// This is the last automated guess — past this point, guessing further
+// without the actual API docs has a low hit rate and just burns
+// diagnostic space. If this also fails, treat inventory as a manual
+// step in the Squarespace dashboard for now; it never blocks publishing
+// either way, and may be moot entirely once real DIGITAL products
+// (rather than the PHYSICAL fallback) are in use. ----
 async function attemptSetInventory(variantId, diagnostics) {
   const attempts = [
-    { label: 'incrementalAdjustments', payload: { incrementalAdjustments: [{ variantId: variantId, incrementalQuantity: 999 }] } },
-    { label: 'adjustments', payload: { adjustments: [{ variantId: variantId, quantity: 999 }] } }
+    { label: 'bare array', payload: [{ variantId: variantId, quantity: 999 }] }
   ];
   for (const attempt of attempts) {
     try {
@@ -332,7 +329,7 @@ async function attemptSetInventory(variantId, diagnostics) {
       diagnostics.push('Inventory (' + attempt.label + '): FAILED — ' + e.message);
     }
   }
-
+  diagnostics.push('Inventory: skipping further automated attempts — set manually in Squarespace for now, doesn\'t block publishing');
 }
 
 // ---- Image/thumbnail attach: confirmed live that this endpoint wants a
