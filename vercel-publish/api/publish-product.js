@@ -261,8 +261,7 @@ async function createPhysicalProduct(details, diagnostics) {
     variants: [
       {
         pricing: { basePrice: { currency: 'USD', value: (details.priceCents / 100).toFixed(2) } },
-        sku: `KF-${Date.now()}`,
-        unlimited: true
+        sku: `KF-${Date.now()}`
       }
     ]
   };
@@ -280,11 +279,7 @@ async function createPhysicalProduct(details, diagnostics) {
 
   const variantId = product.variants && product.variants[0] && product.variants[0].id;
   if (variantId) {
-    const createdUnlimited = product.variants[0].unlimited === true;
-    diagnostics.push(createdUnlimited
-      ? 'Inventory: OK (unlimited set at creation)'
-      : 'Inventory: "unlimited" at creation didn\'t stick, trying variant update…');
-    if (!createdUnlimited) await attemptSetStock(product.id, variantId, diagnostics);
+    await attemptSetStock(product.id, variantId, diagnostics);
   } else {
     diagnostics.push('Inventory: skipped, no variant ID found');
   }
@@ -302,8 +297,10 @@ function buildDescription(details) {
 }
 
 // ---- Stock: confirmed live this screenshot's actual symptom — a
-// created product landed with 0 stock ("Agotado"/Sold Out), meaning
-// "unlimited: true" at creation time (tried above) may not have stuck.
+// created product landed with 0 stock ("Agotado"/Sold Out). Also
+// confirmed live that "unlimited" isn't a valid field on the variant at
+// product-creation time (400 "unknown or readonly fields" — that
+// attempt has been removed since it broke product creation entirely).
 // Rather than keep guessing at the separate /inventory/adjustments
 // endpoint (which rejected 4 different shapes across PATCH/PUT/POST),
 // this tries the SAME variant PUT endpoint that's confirmed working for
