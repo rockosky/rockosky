@@ -49,13 +49,32 @@ const BUCKET = "Ketchup Files UPLOADS";
 const ORIGINALS_BUCKET = "Ketchup Files ORIGINALS"; // private — clean, non-watermarked files
 const TEMPLATE_TAG = "kf-template-unused";
 
+// CORS headers as a plain object, applied identically and explicitly on
+// every single response path (including OPTIONS) rather than relying on
+// setHeader calls that a caching layer further upstream could
+// theoretically strip on some responses but not others. Confirmed live
+// via a real browser CORS error that a stale/cached response was
+// missing Access-Control-Allow-Origin entirely — this is the belt-and-
+// suspenders fix for that, paired with a hard cache-busting redeploy.
+function corsHeaders() {
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Cache-Control': 'no-store' // prevent this exact "stale CORS-less response" scenario from ever being cacheable again
+  };
+}
+
 module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  const headers = corsHeaders();
+  Object.entries(headers).forEach(([key, value]) => res.setHeader(key, value));
 
   if (req.method === 'OPTIONS') {
-    res.status(204).end();
+    // 200 with an explicit empty body instead of 204 — some edge/proxy
+    // layers have historically handled 204 (no content) responses
+    // inconsistently when custom headers are attached; 200 with a body
+    // is the more universally reliable choice for a preflight response.
+    res.status(200).send('');
     return;
   }
   if (req.method !== 'POST') {
