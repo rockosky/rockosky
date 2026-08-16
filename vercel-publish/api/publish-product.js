@@ -82,7 +82,7 @@ module.exports = async (req, res) => {
     return;
   }
 
-  const { photo_id } = req.body || {};
+  const { photo_id, auto } = req.body || {};
   if (!photo_id) {
     res.status(400).json({ error: 'photo_id is required' });
     return;
@@ -127,7 +127,15 @@ module.exports = async (req, res) => {
     // 3. Find the store collection matching this city + season
     const storePageId = await getOrCreateStorePage(photo.city, photo.season);
 
-    // 4. Publish — DIGITAL-via-template first, PHYSICAL-create fallback second
+    // 4. Publish — DIGITAL-via-template first, PHYSICAL-create fallback
+    // second. In auto mode (triggered straight from upload, no admin
+    // review), the Physical fallback is skipped entirely — auto-publish
+    // is only for the clean, no-stock-issues Digital path. If no
+    // Digital template is available, the upload just stays 'pending'
+    // for a human to review normally, same as before this feature
+    // existed, rather than silently creating a Physical listing with
+    // nobody having looked at it.
+    const allowPhysicalFallback = !auto;
     const product = await publishProduct({
       title: photo.title,
       description: photo.description || '',
@@ -139,7 +147,18 @@ module.exports = async (req, res) => {
       storePageId,
       imageUrl,
       originalFileUrl
-    });
+    }, allowPhysicalFallback);
+
+    if (!product) {
+      // auto mode, no digital template available -- leave the photo
+      // exactly as it was (still 'pending') and say so plainly.
+      res.status(200).json({
+        ok: true,
+        held: true,
+        message: 'No Digital template available yet — left pending for manual review instead of auto-publishing as Physical.'
+      });
+      return;
+    }
 
     // 5. Write back to Supabase
     await fetch(`${SUPABASE_URL}/rest/v1/photos?id=eq.${photo_id}`, {
@@ -200,7 +219,7 @@ async function getOrCreateStorePage(city, season) {
 
 // ---- Top-level publish flow: try DIGITAL-via-template, fall back to
 // PHYSICAL-create only if that's not possible right now. ----
-async function publishProduct(details) {
+async function publishProduct(details, allowPhysicalFallback = true) {
   var diagnostics = [];
 
   const template = await findDigitalTemplate();
@@ -211,11 +230,16 @@ async function publishProduct(details) {
       diagnostics.push('Product type: DIGITAL — success');
       return { id: patched.id, url: patched.url, type: 'DIGITAL', diagnostics: diagnostics.join(' | ') };
     } catch (templateErr) {
-      diagnostics.push('DIGITAL template patch failed, falling back to PHYSICAL: ' + templateErr.message);
+      diagnostics.push('DIGITAL template patch failed' + (allowPhysicalFallback ? ', falling back to PHYSICAL: ' : ': ') + templateErr.message);
     }
   } else {
-    diagnostics.push('Product type: no unused DIGITAL template found (tag "' + TEMPLATE_TAG + '"), using PHYSICAL. ' +
+    diagnostics.push('Product type: no unused DIGITAL template found (tag "' + TEMPLATE_TAG + '")' +
+      (allowPhysicalFallback ? ', using PHYSICAL. ' : '. ') +
       'Create a hidden Digital product in Squarespace tagged "' + TEMPLATE_TAG + '" to enable true digital publishing.');
+  }
+
+  if (!allowPhysicalFallback) {
+    return null; // auto-publish mode: no Digital template available, so nothing gets published — stays 'pending' for manual review
   }
 
   const created = await createPhysicalProduct(details, diagnostics);
