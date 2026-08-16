@@ -1,236 +1,537 @@
--- ============================================================
--- KETCHUP FILES — schema migration
--- Safe to run all at once, and safe to re-run (every statement is
--- idempotent: IF NOT EXISTS / ADD COLUMN IF NOT EXISTS throughout).
--- Run this in the Supabase SQL editor for project lfbtreaojwxxwuwhssba.
--- ============================================================
+// /api/publish-product.js
+//
+// Called by the admin dashboard when Felipe hits "Approve & Publish".
+// 1. Loads the photo's saved details from Supabase (service role, bypasses RLS)
+// 2. Downloads the image from Supabase Storage
+// 3. Publishes it as a Squarespace product — see PRODUCT STRATEGY below
+// 4. Writes the resulting Squarespace product id/url back to Supabase, status -> 'published'
+//
+// ============================================================
+// PRODUCT STRATEGY — why this isn't a plain "create a DIGITAL product" call
+// ============================================================
+// Confirmed live (see /api/test-digital-patch.js): Squarespace's Commerce
+// API refuses to CREATE a product with type DIGITAL — it 405s with
+// OPERATION_NOT_ALLOWED_FOR_PRODUCT_TYPE. Only PHYSICAL can be created
+// through that endpoint. What's NOT yet confirmed live is whether it will
+// let you PATCH/update a DIGITAL product that already exists.
+//
+// So this endpoint takes the approach that's actually possible today:
+//   1. Look for an unused DIGITAL product "template" already sitting in
+//      the store — one you create ONCE by hand in the Squarespace
+//      dashboard (type: Digital), tag with `kf-template-unused`, and
+//      leave hidden. This script finds one of those and PATCHes it with
+//      the real title/price/description/image/tags, then makes it
+//      visible — so the live listing is a genuine DIGITAL product, never
+//      created via the blocked endpoint, only ever edited.
+//   2. If no template is found (or patching one fails for any reason),
+//      it falls back to creating a PHYSICAL product the old way, so
+//      publishing never just breaks — it degrades instead of failing.
+//   3. Every step's real success/failure is collected in `diagnostics`
+//      and shown back in the admin dashboard, so it's obvious which path
+//      was taken and whether the image/inventory steps actually worked
+//      rather than silently guessing.
+//
+// TO USE THE DIGITAL PATH: in Squarespace, create one or more Digital
+// products by hand (any placeholder title/price is fine), tag each with
+// exactly `kf-template-unused`, and leave them hidden (isVisible: false).
+// This script consumes one template per publish and removes the tag once
+// used, so keep a small stock of them around (a handful is plenty since
+// they get reused... actually they're consumed, not reused — see note
+// below on making more).
+// ============================================================
 
--- ---- photos: per-upload category, rejection reason, and the
--- Squarespace publish trail (product id/url + when it went live) ----
-ALTER TABLE photos ADD COLUMN IF NOT EXISTS category text;
-ALTER TABLE photos ADD COLUMN IF NOT EXISTS rejection_reason text;
-ALTER TABLE photos ADD COLUMN IF NOT EXISTS squarespace_product_id text;
-ALTER TABLE photos ADD COLUMN IF NOT EXISTS squarespace_product_url text;
-ALTER TABLE photos ADD COLUMN IF NOT EXISTS published_at timestamptz;
+const crypto = require('crypto');
 
--- ---- photos: fashion-specific sub-tag on photo/video uploads (Runway,
--- Backstage, Street Style, First Looks, Interview, Portraits,
--- Journalist), plus the pieces behind the auto-filled title template
--- ("Street style photo of {guest} at the {designer} show, {season}") —
--- guest_name/designer_name are stored separately from the composed
--- `title` so they can drive autocomplete suggestions (distinct past
--- values) without parsing them back out of free text. guest_name is
--- deliberately left NULL rather than storing the literal word "Guest"
--- when a contributor doesn't know who's in the photo — "Guest" is a
--- display-time default, not real data. ----
-ALTER TABLE photos ADD COLUMN IF NOT EXISTS subcategory text;
-ALTER TABLE photos ADD COLUMN IF NOT EXISTS guest_name text;
-ALTER TABLE photos ADD COLUMN IF NOT EXISTS designer_name text;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SQUARESPACE_API_KEY = process.env.SQUARESPACE_API_KEY;
+const BUCKET = "Ketchup Files UPLOADS";
+const ORIGINALS_BUCKET = "Ketchup Files ORIGINALS"; // private — clean, non-watermarked files
+const TEMPLATE_TAG = "kf-template-unused";
 
--- ---- photos: the clean, non-watermarked original — lives in a
--- PRIVATE bucket ("Ketchup Files ORIGINALS"), never the public one.
--- This is what actually gets emailed to someone after they buy; the
--- public bucket only ever holds the watermarked display copy. Rows
--- uploaded before this existed will have this as NULL. ----
-ALTER TABLE photos ADD COLUMN IF NOT EXISTS original_file_path text;
+// CORS headers as a plain object, applied identically and explicitly on
+// every single response path (including OPTIONS) rather than relying on
+// setHeader calls that a caching layer further upstream could
+// theoretically strip on some responses but not others. Confirmed live
+// via a real browser CORS error that a stale/cached response was
+// missing Access-Control-Allow-Origin entirely — this is the belt-and-
+// suspenders fix for that, paired with a hard cache-busting redeploy.
+function corsHeaders() {
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Cache-Control': 'no-store' // prevent this exact "stale CORS-less response" scenario from ever being cacheable again
+  };
+}
 
--- ---- order_deliveries: audit trail for the purchase -> email-the-
--- original pipeline. Also doubles as a dedupe guard so a retried
--- Squarespace webhook doesn't send the same buyer two emails. ----
-CREATE TABLE IF NOT EXISTS order_deliveries (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  squarespace_order_id text UNIQUE NOT NULL,
-  customer_email text,
-  photo_ids uuid[],
-  delivered_count integer DEFAULT 0,
-  missing_originals text[],
-  delivered_at timestamptz DEFAULT now()
-);
+module.exports = async (req, res) => {
+  const headers = corsHeaders();
+  Object.entries(headers).forEach(([key, value]) => res.setHeader(key, value));
 
--- Was created above without RLS enabled — Supabase's own security
--- advisor correctly flags any public table with RLS off as CRITICAL,
--- since it means anyone with the anon key can read/write every row
--- with no restriction at all. This table only needs to be written by
--- the service-role key (which bypasses RLS regardless), so simply
--- enabling RLS with no permissive policies locks it down completely
--- for anyone using the anon key while leaving server-side access
--- untouched.
-ALTER TABLE order_deliveries ENABLE ROW LEVEL SECURITY;
+  if (req.method === 'OPTIONS') {
+    // 200 with an explicit empty body instead of 204 — some edge/proxy
+    // layers have historically handled 204 (no content) responses
+    // inconsistently when custom headers are attached; 200 with a body
+    // is the more universally reliable choice for a preflight response.
+    res.status(200).send('');
+    return;
+  }
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
 
--- ---- La Semana de la Moda export tracking — lets the admin dashboard
--- show what's already been exported vs. what's new since the last pull. ----
-ALTER TABLE photos ADD COLUMN IF NOT EXISTS exported_to_lsdm boolean DEFAULT false;
-ALTER TABLE photos ADD COLUMN IF NOT EXISTS lsdm_exported_at timestamptz;
+  const { photo_id } = req.body || {};
+  if (!photo_id) {
+    res.status(400).json({ error: 'photo_id is required' });
+    return;
+  }
 
--- ---- photos: columns the current uploader/dashboard actually read and
--- write that may predate this migration — confirmed via direct code
--- inspection of the live 02/03 files, not assumed. Adding these is what
--- was actually missing if uploads have been silently failing: without
--- media_type/camera_used existing as real columns, that insert() call
--- would error out completely and no row (and therefore no photo, no
--- thumbnail) would ever get saved. ----
-ALTER TABLE photos ADD COLUMN IF NOT EXISTS media_type text;
-ALTER TABLE photos ADD COLUMN IF NOT EXISTS camera_used text;
-ALTER TABLE photos ADD COLUMN IF NOT EXISTS stripe_checkout_url text;
+  try {
+    // 1. Load photo row (service role key bypasses RLS)
+    const photoRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
+      { headers: supabaseHeaders() }
+    );
+    const photos = await photoRes.json();
+    const photo = photos && photos[0];
+    if (!photo) throw new Error('Photo not found');
+    if (!photo.title || !photo.city || !photo.season || photo.price_cents == null) {
+      throw new Error('Photo is missing title, city, season, or price');
+    }
 
--- Every insert from the uploader omits `status` entirely, relying on the
--- column default to land new rows as 'pending'. If that default was
--- never set, new rows land with status = NULL — which the admin
--- dashboard's `.eq('status', 'pending')` filter would never match, so
--- submissions would silently vanish from the review queue while still
--- existing in the table. This makes sure that can't happen regardless
--- of whether it was set before.
-ALTER TABLE photos ALTER COLUMN status SET DEFAULT 'pending';
+    // 2. Public image URL from Supabase Storage
+    const imageUrl = `${SUPABASE_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
 
--- Speeds up the admin dashboard's "pending, oldest first" query and the
--- LSDM export feed's "approved since last pull" query as the table grows.
-CREATE INDEX IF NOT EXISTS idx_photos_status_created_at ON photos (status, created_at);
-CREATE INDEX IF NOT EXISTS idx_photos_exported_to_lsdm ON photos (exported_to_lsdm) WHERE status = 'published';
+    // 2b. Signed URL to the clean original, if one was saved (private
+    // bucket — needs a signed URL rather than a public one). Only used
+    // for the DIGITAL path, to fill Squarespace's native file-delivery
+    // slot; the PHYSICAL fallback has no equivalent field.
+    let originalFileUrl = null;
+    if (photo.original_file_path) {
+      const signRes = await fetch(
+        `${SUPABASE_URL}/storage/v1/object/sign/${encodeURIComponent(ORIGINALS_BUCKET)}/${photo.original_file_path}`,
+        {
+          method: 'POST',
+          headers: { ...supabaseHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ expiresIn: 300 }) // just long enough to immediately re-download and forward to Squarespace
+        }
+      );
+      if (signRes.ok) {
+        const signData = await signRes.json();
+        if (signData.signedURL) originalFileUrl = `${SUPABASE_URL}/storage/v1${signData.signedURL}`;
+      }
+    }
 
--- ============================================================
--- ADMIN WRITE ACCESS ON photos
--- ============================================================
--- Likely root cause of "Approve/Reject doesn't seem to do anything in
--- the admin dashboard": if the existing UPDATE policy on `photos` only
--- allows a contributor to update their OWN row (auth.uid() = user_id),
--- the admin account trying to approve/reject someone ELSE's upload gets
--- silently blocked by RLS — no error is thrown, the update just quietly
--- affects zero rows, and the pending list reloads looking completely
--- unchanged. This adds an explicit carve-out so the admin account can
--- update any row regardless of who uploaded it. It's additive — any
--- existing owner-based UPDATE policy keeps working for contributors,
--- this just adds a second way a write can be allowed.
-DROP POLICY IF EXISTS "kf_admin_update_any_photo" ON photos;
-CREATE POLICY "kf_admin_update_any_photo" ON photos
-  FOR UPDATE USING (auth.email() = 'creators@ketchupfiles.com')
-  WITH CHECK (auth.email() = 'creators@ketchupfiles.com');
--- ============================================================
+    // 3. Find the store collection matching this city + season
+    const storePageId = await getOrCreateStorePage(photo.city, photo.season);
 
--- ---- creator_profiles: contributor-editable profile (current uploader) ----
-ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS profile_photo_url text;
-ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS display_name text;
-ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS bio text;
-ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS stripe_account_id text;
+    // 4. Publish — DIGITAL-via-template first, PHYSICAL-create fallback second
+    const product = await publishProduct({
+      title: photo.title,
+      description: photo.description || '',
+      priceCents: photo.price_cents,
+      city: photo.city,
+      season: photo.season,
+      hashtags: photo.hashtags || '',
+      socialUrl: photo.social_url || '',
+      storePageId,
+      imageUrl,
+      originalFileUrl
+    });
 
--- ---- creator_profiles: additional columns used by the Interfaz Studio
--- Marketplace window (avatar + declared work categories there use their
--- own column names, separate from profile_photo_url/bio above — both
--- sets can coexist without conflict since the two tools don't share
--- fields). Skip this block if you've dropped that Marketplace feature. ----
-ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS avatar_url text;
-ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS categories text;
-ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS profile_views integer DEFAULT 0;
+    // 5. Write back to Supabase
+    await fetch(`${SUPABASE_URL}/rest/v1/photos?id=eq.${photo_id}`, {
+      method: 'PATCH',
+      headers: { ...supabaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      body: JSON.stringify({
+        status: 'published',
+        squarespace_product_id: product.id,
+        squarespace_product_url: product.url,
+        published_at: new Date().toISOString()
+      })
+    });
 
--- ---- profile_comments: guestbook used by the Interfaz Studio
--- Marketplace window's profile modal. Skip if not using that feature. ----
-CREATE TABLE IF NOT EXISTS profile_comments (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  profile_user_id uuid NOT NULL,
-  author_name text,
-  comment_text text NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_profile_comments_profile_user_id ON profile_comments (profile_user_id, created_at DESC);
+    res.status(200).json({ ok: true, url: product.url, productType: product.type, diagnostics: product.diagnostics });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+};
 
-ALTER TABLE profile_comments ENABLE ROW LEVEL SECURITY;
+function supabaseHeaders() {
+  return {
+    apikey: SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+  };
+}
 
--- Anyone can read the guestbook (it's public by design, like a MySpace
--- comment wall). Only a signed-in user can post, and only as themself.
-DROP POLICY IF EXISTS "profile_comments_select_all" ON profile_comments;
-CREATE POLICY "profile_comments_select_all" ON profile_comments
-  FOR SELECT USING (true);
+// Looks up an existing store page/collection whose name contains BOTH
+// the given city and season, falling back to city-only if no exact
+// combined match is found.
+async function getOrCreateStorePage(city, season) {
+  const listRes = await fetch('https://api.squarespace.com/1.0/commerce/store_pages', {
+    headers: squarespaceHeaders()
+  });
+  const list = await listRes.json();
+  const pages = list.storePages || list.pages || list.results || (Array.isArray(list) ? list : []);
 
-DROP POLICY IF EXISTS "profile_comments_insert_authenticated" ON profile_comments;
-CREATE POLICY "profile_comments_insert_authenticated" ON profile_comments
-  FOR INSERT WITH CHECK (auth.role() = 'authenticated');
+  const cityLower = (city || '').toLowerCase().trim();
+  const seasonLower = (season || '').toLowerCase().trim();
 
--- ============================================================
--- STORAGE (bucket: "Ketchup Files UPLOADS")
--- ============================================================
--- This is the other likely cause of "photo doesn't get saved / no
--- thumbnail": storage.objects has row-level security ON by default in
--- Supabase, same as any other table. Without an explicit policy, a
--- contributor's browser can be fully authenticated and still get a
--- silent/blocked upload, or an upload can succeed while the resulting
--- public URL 403s for everyone else (including Squarespace trying to
--- fetch the thumbnail) — because nothing ever granted read/write access
--- on this bucket specifically. These two policies are the minimum the
--- app actually needs:
---   1. Public read — required for photo URLs to work at all as
---      thumbnails/on the live site/as a Squarespace product image.
---   2. Authenticated users can upload only into a folder matching their
---      own user id (path convention already used throughout: every
---      upload path starts with `${user.id}/...`).
--- If these already exist under different names, these CREATE POLICY
--- calls will simply error as duplicates — safe to skip re-running the
--- ones that already exist, or rename/drop the old ones first.
+  var existing = pages.find((p) => {
+    if (!p || !p.title) return false;
+    const nameLower = p.title.toLowerCase();
+    return nameLower.includes(cityLower) && (seasonLower ? nameLower.includes(seasonLower) : true);
+  });
 
-DROP POLICY IF EXISTS "kf_uploads_public_read" ON storage.objects;
-CREATE POLICY "kf_uploads_public_read" ON storage.objects
-  FOR SELECT USING (bucket_id = 'Ketchup Files UPLOADS');
+  if (!existing) {
+    existing = pages.find((p) => p && p.title && p.title.toLowerCase().includes(cityLower));
+  }
 
-DROP POLICY IF EXISTS "kf_uploads_own_folder_insert" ON storage.objects;
-CREATE POLICY "kf_uploads_own_folder_insert" ON storage.objects
-  FOR INSERT WITH CHECK (
-    bucket_id = 'Ketchup Files UPLOADS'
-    AND auth.role() = 'authenticated'
-    AND (storage.foldername(name))[1] = auth.uid()::text
+  if (existing && existing.id) return existing.id;
+
+  throw new Error(
+    `No store page found containing both "${city}" and "${season}" in its name. ` +
+    `Available page names: ${pages.map(p => p && p.title).filter(Boolean).join(', ') || '(none found)'}.`
   );
+}
 
--- Lets a contributor delete/replace their own files (e.g. re-uploading a
--- profile photo, or Marketplace's "Delete" button on their own listing).
-DROP POLICY IF EXISTS "kf_uploads_own_folder_delete" ON storage.objects;
-CREATE POLICY "kf_uploads_own_folder_delete" ON storage.objects
-  FOR DELETE USING (
-    bucket_id = 'Ketchup Files UPLOADS'
-    AND auth.role() = 'authenticated'
-    AND (storage.foldername(name))[1] = auth.uid()::text
-  );
+// ---- Top-level publish flow: try DIGITAL-via-template, fall back to
+// PHYSICAL-create only if that's not possible right now. ----
+async function publishProduct(details) {
+  var diagnostics = [];
 
--- ============================================================
--- STORAGE (bucket: "Ketchup Files ORIGINALS" — PRIVATE)
--- ============================================================
--- REMINDER: these policies only matter once the bucket itself exists.
--- SQL can't create a Storage bucket — that's a one-time manual step in
--- Supabase Dashboard > Storage > New bucket, name it exactly
--- "Ketchup Files ORIGINALS", and leave "Public bucket" UNCHECKED.
---
--- The uploader now also saves a clean, non-watermarked original to this
--- bucket on every upload (see 02-kf-upload-widget.html). It needs an
--- INSERT policy for the same reason the public bucket did — without one,
--- that second upload call fails RLS silently, the original never gets
--- saved, and there's nothing to deliver when someone buys later.
---
--- Deliberately NO public or "authenticated" read policy here — the only
--- thing that should ever read from this bucket is the SUPABASE_SERVICE_
--- ROLE_KEY used server-side in publish-product.js/fulfill-order.js,
--- which bypasses RLS entirely and doesn't need a policy at all. If a
--- read policy ever gets added here by mistake, that defeats the entire
--- point of keeping this bucket private.
-DROP POLICY IF EXISTS "kf_originals_own_folder_insert" ON storage.objects;
-CREATE POLICY "kf_originals_own_folder_insert" ON storage.objects
-  FOR INSERT WITH CHECK (
-    bucket_id = 'Ketchup Files ORIGINALS'
-    AND auth.role() = 'authenticated'
-    AND (storage.foldername(name))[1] = auth.uid()::text
-  );
+  const template = await findDigitalTemplate();
+  if (template) {
+    diagnostics.push('Product type: attempting DIGITAL (patching template ' + template.id + ')');
+    try {
+      const patched = await patchDigitalTemplate(template, details, diagnostics);
+      diagnostics.push('Product type: DIGITAL — success');
+      return { id: patched.id, url: patched.url, type: 'DIGITAL', diagnostics: diagnostics.join(' | ') };
+    } catch (templateErr) {
+      diagnostics.push('DIGITAL template patch failed, falling back to PHYSICAL: ' + templateErr.message);
+    }
+  } else {
+    diagnostics.push('Product type: no unused DIGITAL template found (tag "' + TEMPLATE_TAG + '"), using PHYSICAL. ' +
+      'Create a hidden Digital product in Squarespace tagged "' + TEMPLATE_TAG + '" to enable true digital publishing.');
+  }
 
-DROP POLICY IF EXISTS "kf_originals_own_folder_delete" ON storage.objects;
-CREATE POLICY "kf_originals_own_folder_delete" ON storage.objects
-  FOR DELETE USING (
-    bucket_id = 'Ketchup Files ORIGINALS'
-    AND auth.role() = 'authenticated'
-    AND (storage.foldername(name))[1] = auth.uid()::text
-  );
+  const created = await createPhysicalProduct(details, diagnostics);
+  return { id: created.id, url: created.url, type: 'PHYSICAL', diagnostics: diagnostics.join(' | ') };
+}
 
--- ============================================================
--- NOTE ON RLS FOR photos / creator_profiles (the tables, not storage):
--- This migration only ADDS columns — it does not touch existing RLS
--- policies on `photos` or `creator_profiles`. If those tables already
--- have row-level security enabled (they should, given contributors
--- read/write their own rows), the new columns are covered automatically
--- by whatever row-matching policy already exists — no new policy is
--- needed just because a column was added. Only profile_comments and the
--- storage.objects policies above are genuinely new, which is why they
--- get explicit policies.
--- ============================================================
+// ---- Find one unused DIGITAL template product, tagged and hidden,
+// created by hand in the Squarespace dashboard ahead of time. ----
+// ---- Find one unused DIGITAL template product, tagged and hidden,
+// created by hand in the Squarespace dashboard ahead of time. Paginates
+// through the full product list rather than just the first page — with
+// any real number of products already in the store, a template sitting
+// past page 1 would otherwise never be found, silently falling back to
+// PHYSICAL every time even though the template genuinely exists. ----
+async function findDigitalTemplate() {
+  let cursor = null;
+  let pagesChecked = 0;
+  const MAX_PAGES = 5; // each page is a full network round-trip — keep this low enough that searching never becomes the reason the whole request times out
+
+  while (pagesChecked < MAX_PAGES) {
+    const url = new URL('https://api.squarespace.com/1.0/commerce/products');
+    if (cursor) url.searchParams.set('cursor', cursor);
+
+    const listRes = await fetch(url.toString(), { headers: squarespaceHeaders() });
+    if (!listRes.ok) return null;
+    const data = await listRes.json();
+    const products = data.products || data.results || (Array.isArray(data) ? data : []);
+
+    const match = products.find((p) =>
+      p && p.type === 'DIGITAL' && Array.isArray(p.tags) && p.tags.includes(TEMPLATE_TAG)
+    );
+    if (match) return match;
+
+    pagesChecked++;
+    const pagination = data.pagination || {};
+    if (pagination.hasNextPage && pagination.nextPageCursor) {
+      cursor = pagination.nextPageCursor;
+    } else {
+      break; // no more pages
+    }
+  }
+  return null;
+}
+
+// ---- Turn a blank DIGITAL template into the real listing via PUT.
+// (Confirmed live: PATCH gets a 405 "Method 'PATCH' is not supported"
+// on /1.0/commerce/products/{id} — Squarespace wants PUT for updates,
+// same as it does for the variant/price endpoint below.) ----
+async function patchDigitalTemplate(template, details, diagnostics) {
+  const fullDescription = buildDescription(details);
+  const remainingTags = (template.tags || []).filter(t => t !== TEMPLATE_TAG);
+  const newTags = remainingTags.concat([details.city, details.season, 'Ketchup Files']);
+
+  const patchBody = {
+    storePageId: details.storePageId,
+    name: details.title,
+    description: fullDescription,
+    isVisible: true,
+    tags: newTags
+  };
+
+  const patchRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${template.id}`, {
+    method: 'PUT',
+    headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(patchBody)
+  });
+  if (!patchRes.ok) {
+    const errText = await patchRes.text();
+    throw new Error('Base update failed: ' + errText.substring(0, 300));
+  }
+  const product = await patchRes.json();
+
+  // Price lives on the variant, not the product itself — update the
+  // template's existing variant rather than trying to replace the
+  // variants array wholesale (which some Commerce endpoints reject).
+  const variantId = product.variants && product.variants[0] && product.variants[0].id;
+  if (variantId) {
+    const priceRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${template.id}/variants/${variantId}`, {
+      method: 'PUT',
+      headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pricing: { basePrice: { currency: 'USD', value: (details.priceCents / 100).toFixed(2) } } })
+    });
+    diagnostics.push(priceRes.ok ? 'Price: OK' : 'Price: FAILED — ' + (await priceRes.text()).substring(0, 200));
+    // Deliberately NOT calling attemptSetStock here. If you set this
+    // template's variant to unlimited stock once by hand in Squarespace
+    // before it's ever used, this code should never touch that setting
+    // again — only title/description/price/image get patched per use.
+    // Touching stock here would risk a guessed API call silently
+    // overwriting your manual "unlimited" with some wrong quantity.
+    diagnostics.push('Inventory: not touched — set unlimited stock once by hand on this template in Squarespace and it\'ll stay that way for every future publish');
+
+    // A real DIGITAL product has its own native file-delivery slot
+    // ("Inventory > File" in the product editor — Squarespace generates
+    // its own secure, expiring download link once that's filled in, no
+    // custom email pipeline needed for this path at all). This uploads
+    // the clean, non-watermarked original there directly.
+    if (details.originalFileUrl) {
+      await attemptAttachDigitalFile(template.id, details.originalFileUrl, diagnostics);
+    } else {
+      diagnostics.push('Digital file: skipped — no clean original was saved for this upload (only uploads made after the original-file-backup feature was added have one)');
+    }
+  } else {
+    diagnostics.push('Price: skipped, template has no variant to update');
+  }
+
+  await attemptAttachImage(template.id, details.imageUrl, diagnostics);
+
+  return { id: product.id, url: product.url || template.url || '' };
+}
+
+// ---- Fallback: create a PHYSICAL product the way this always has, for
+// when no digital template is available yet. ----
+async function createPhysicalProduct(details, diagnostics) {
+  const fullDescription = buildDescription(details);
+  var hashtagList = (details.hashtags || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean);
+
+  const body = {
+    type: 'PHYSICAL',
+    storePageId: details.storePageId,
+    name: details.title,
+    description: fullDescription,
+    isVisible: true,
+    tags: [details.city, details.season, 'Ketchup Files'].concat(hashtagList),
+    variants: [
+      {
+        pricing: { basePrice: { currency: 'USD', value: (details.priceCents / 100).toFixed(2) } },
+        sku: `KF-${Date.now()}`
+      }
+    ]
+  };
+
+  const createRes = await fetch('https://api.squarespace.com/1.0/commerce/products', {
+    method: 'POST',
+    headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!createRes.ok) {
+    const errText = await createRes.text();
+    throw new Error(`Squarespace product create failed: ${errText}`);
+  }
+  const product = await createRes.json();
+
+  const variantId = product.variants && product.variants[0] && product.variants[0].id;
+  if (variantId) {
+    await attemptSetStock(product.id, variantId, diagnostics);
+  } else {
+    diagnostics.push('Inventory: skipped, no variant ID found');
+  }
+
+  await attemptAttachImage(product.id, details.imageUrl, diagnostics);
+
+  return { id: product.id, url: product.url || '' };
+}
+
+function buildDescription(details) {
+  var hashtagList = (details.hashtags || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean);
+  return (details.description || '') + `\n\nLocation: ${details.city} — ${details.season}`
+    + (hashtagList.length ? `\n\n${hashtagList.map(t => '#' + t.replace(/^#/, '')).join(' ')}` : '')
+    + (details.socialUrl ? `\n\nProfile / Link: ${details.socialUrl}` : '');
+}
+
+// ---- Stock: confirmed live this screenshot's actual symptom — a
+// created product landed with 0 stock ("Agotado"/Sold Out). Also
+// confirmed live that "unlimited" isn't a valid field on the variant at
+// product-creation time (400 "unknown or readonly fields" — that
+// attempt has been removed since it broke product creation entirely).
+// Rather than keep guessing at the separate /inventory/adjustments
+// endpoint (which rejected 4 different shapes across PATCH/PUT/POST),
+// this tries the SAME variant PUT endpoint that's confirmed working for
+// price — since that call already succeeds, adding stock fields to it
+// is a much better bet than a different endpoint that's failed every
+// time so far. Falls back to the adjustments endpoint only as a last
+// resort. Non-fatal either way, but note this one actually matters:
+// 0 stock blocks real sales, unlike the earlier failures which didn't. ----
+async function attemptSetStock(productId, variantId, diagnostics) {
+  const variantAttempts = [
+    { label: 'variant PUT unlimited', payload: { unlimited: true } },
+    { label: 'variant PUT stock.unlimited', payload: { stock: { unlimited: true } } },
+    { label: 'variant PUT stock.quantity', payload: { stock: { quantity: 999, unlimited: false } } }
+  ];
+  for (const attempt of variantAttempts) {
+    try {
+      const res = await fetch(`https://api.squarespace.com/1.0/commerce/products/${productId}/variants/${variantId}`, {
+        method: 'PUT',
+        headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(attempt.payload)
+      });
+      if (res.ok) {
+        diagnostics.push('Inventory: OK (' + attempt.label + ')');
+        return;
+      }
+      const errText = await res.text();
+      diagnostics.push('Inventory (' + attempt.label + '): FAILED — ' + errText.substring(0, 150));
+    } catch (e) {
+      diagnostics.push('Inventory (' + attempt.label + '): FAILED — ' + e.message);
+    }
+  }
+
+  // Last resort: the separate adjustments endpoint, in case it turns out
+  // to need an idempotency key AND a shape none of the above guessed.
+  try {
+    const invRes = await fetch('https://api.squarespace.com/1.0/commerce/inventory/adjustments', {
+      method: 'POST',
+      headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify([{ variantId: variantId, quantity: 999 }])
+    });
+    if (invRes.ok) {
+      diagnostics.push('Inventory: OK (adjustments endpoint, bare array)');
+      return;
+    }
+    diagnostics.push('Inventory (adjustments endpoint): FAILED — ' + (await invRes.text()).substring(0, 150));
+  } catch (e) {
+    diagnostics.push('Inventory (adjustments endpoint): FAILED — ' + e.message);
+  }
+  diagnostics.push('Inventory: all automated attempts failed — until this is confirmed working, check "Continue selling when out of stock" in this product\'s Squarespace inventory settings as an immediate workaround so it isn\'t stuck showing Sold Out.');
+}
+
+// ---- Image/thumbnail attach: confirmed live that this endpoint wants a
+// real file upload, not a JSON body referencing a URL — the earlier
+// {images:[{url}]} attempt got back "Expected exactly one file part
+// named 'file', but found none." So this downloads the actual image
+// bytes from Supabase Storage and POSTs them as multipart/form-data
+// with the field named 'file', which is what the error message says
+// it's looking for. ----
+async function attemptAttachImage(productId, imageUrl, diagnostics) {
+  try {
+    const imgRes = await fetch(imageUrl);
+    if (!imgRes.ok) {
+      diagnostics.push('Image: FAILED — could not download source image (' + imgRes.status + ')');
+      return;
+    }
+    const imgBlob = await imgRes.blob();
+    const fileName = imageUrl.split('/').pop() || 'photo.jpg';
+
+    const form = new FormData();
+    form.append('file', imgBlob, fileName);
+
+    const uploadRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${productId}/images`, {
+      method: 'POST',
+      headers: squarespaceHeaders(), // no Content-Type here — FormData sets its own multipart boundary
+      body: form
+    });
+    if (uploadRes.ok) {
+      diagnostics.push('Image: OK (multipart upload)');
+      return;
+    }
+    const errText = await uploadRes.text();
+    diagnostics.push('Image: FAILED — ' + errText.substring(0, 200));
+  } catch (e) {
+    diagnostics.push('Image: FAILED — ' + e.message);
+  }
+}
+
+// ---- Digital file: fills Squarespace's native "Inventory > File" slot
+// on a DIGITAL product, which is what makes Squarespace generate its
+// own secure, expiring download link for the buyer — no custom email
+// pipeline needed for this path. Not yet confirmed live which exact
+// endpoint/field name this needs, so two plausible shapes are tried,
+// same multipart pattern as the confirmed-working image upload (a real
+// file part, not a URL reference — Squarespace has already shown it
+// wants files uploaded that way, not referenced). ----
+async function attemptAttachDigitalFile(productId, originalFileUrl, diagnostics) {
+  let fileRes;
+  try {
+    fileRes = await fetch(originalFileUrl);
+    if (!fileRes.ok) {
+      diagnostics.push('Digital file: FAILED — could not download original (' + fileRes.status + ')');
+      return;
+    }
+  } catch (e) {
+    diagnostics.push('Digital file: FAILED — could not download original: ' + e.message);
+    return;
+  }
+  const fileBlob = await fileRes.blob();
+  const fileName = originalFileUrl.split('/').pop().split('?')[0] || 'original.jpg';
+
+  const attempts = [
+    { label: 'products/{id}/digital-file', url: `https://api.squarespace.com/1.0/commerce/products/${productId}/digital-file` },
+    { label: 'products/{id}/inventory/file', url: `https://api.squarespace.com/1.0/commerce/products/${productId}/inventory/file` }
+  ];
+  for (const attempt of attempts) {
+    try {
+      const form = new FormData();
+      form.append('file', fileBlob, fileName);
+      const res = await fetch(attempt.url, {
+        method: 'POST',
+        headers: squarespaceHeaders(),
+        body: form
+      });
+      if (res.ok) {
+        diagnostics.push('Digital file: OK (' + attempt.label + ')');
+        return;
+      }
+      const errText = await res.text();
+      diagnostics.push('Digital file (' + attempt.label + '): FAILED — ' + errText.substring(0, 150));
+    } catch (e) {
+      diagnostics.push('Digital file (' + attempt.label + '): FAILED — ' + e.message);
+    }
+  }
+  diagnostics.push('Digital file: automated upload failed — for now, upload the original manually to this product\'s Inventory > File field in Squarespace, or send the next diagnostic here so the endpoint/field can be corrected.');
+}
+
+function squarespaceHeaders() {
+  return {
+    Authorization: `Bearer ${SQUARESPACE_API_KEY}`,
+    'User-Agent': 'KetchupFiles-Publisher/1.0'
+  };
+}
+
+// Explicitly request a longer execution window. Vercel functions default
+// to a short timeout (as low as 10-15s) regardless of plan tier unless a
+// file requests more — this flow makes several sequential calls to
+// Squarespace and Supabase in one request (product create/update, price,
+// image upload, digital file upload, inventory attempts), which can add
+// up past the default before ever hitting a real error. 60s gives real
+// headroom without reserving the full 300s Pro allows. This has to come
+// AFTER module.exports is assigned the handler function above, or it
+// gets wiped out by that assignment.
+module.exports.config = { maxDuration: 60 };
