@@ -124,10 +124,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    // 3. Find the store collection matching this city + season
-    const storePageId = await getOrCreateStorePage(photo.city, photo.season);
-
-    // 4. Publish — DIGITAL-via-template first, PHYSICAL-create fallback
+    // 3. Publish — DIGITAL-via-template first, PHYSICAL-create fallback
     // second. In auto mode (triggered straight from upload, no admin
     // review), the Physical fallback is skipped entirely — auto-publish
     // is only for the clean, no-stock-issues Digital path. If no
@@ -135,6 +132,14 @@ module.exports = async (req, res) => {
     // for a human to review normally, same as before this feature
     // existed, rather than silently creating a Physical listing with
     // nobody having looked at it.
+    //
+    // Note: the store-page lookup (matching a city/season page like
+    // "new-york-fashion-week-2026") is only needed for the Physical
+    // fallback now — Digital products stay on whichever page their
+    // template already lives on. So it's looked up lazily inside
+    // createPhysicalProduct itself, not here, otherwise a city/season
+    // with no matching physical page would incorrectly fail an
+    // otherwise-successful Digital publish.
     const allowPhysicalFallback = !auto;
     const product = await publishProduct({
       title: photo.title,
@@ -144,7 +149,6 @@ module.exports = async (req, res) => {
       season: photo.season,
       hashtags: photo.hashtags || '',
       socialUrl: photo.social_url || '',
-      storePageId,
       imageUrl,
       originalFileUrl
     }, allowPhysicalFallback);
@@ -293,8 +297,13 @@ async function patchDigitalTemplate(template, details, diagnostics) {
   const remainingTags = (template.tags || []).filter(t => t !== TEMPLATE_TAG);
   const newTags = remainingTags.concat([details.city, details.season, 'Ketchup Files']);
 
+  // Deliberately NOT setting storePageId here — digital products stay on
+  // whichever store page the template already lives on (e.g.
+  // ketchupfiles.com/street-style-contributors), rather than getting
+  // moved to a city/season-specific page the way the Physical fallback
+  // does. City/season are still added as tags below, so they're still
+  // filterable/searchable, just not relocated.
   const patchBody = {
-    storePageId: details.storePageId,
     name: details.title,
     description: fullDescription,
     isVisible: true,
@@ -356,9 +365,11 @@ async function createPhysicalProduct(details, diagnostics) {
   const fullDescription = buildDescription(details);
   var hashtagList = (details.hashtags || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean);
 
+  const storePageId = await getOrCreateStorePage(details.city, details.season);
+
   const body = {
     type: 'PHYSICAL',
-    storePageId: details.storePageId,
+    storePageId: storePageId,
     name: details.title,
     description: fullDescription,
     isVisible: true,
