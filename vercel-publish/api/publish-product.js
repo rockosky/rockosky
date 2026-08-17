@@ -82,7 +82,7 @@ module.exports = async (req, res) => {
     return;
   }
 
-  const { photo_id, auto } = req.body || {};
+  const { photo_id, auto, product_type } = req.body || {};
   if (!photo_id) {
     res.status(400).json({ error: 'photo_id is required' });
     return;
@@ -141,6 +141,7 @@ module.exports = async (req, res) => {
     // with no matching physical page would incorrectly fail an
     // otherwise-successful Digital publish.
     const allowPhysicalFallback = !auto;
+    const forceType = (product_type === 'digital' || product_type === 'physical') ? product_type : null;
     const product = await publishProduct({
       title: photo.title,
       description: photo.description || '',
@@ -151,7 +152,7 @@ module.exports = async (req, res) => {
       socialUrl: photo.social_url || '',
       imageUrl,
       originalFileUrl
-    }, allowPhysicalFallback);
+    }, allowPhysicalFallback, forceType);
 
     if (!product) {
       // auto mode, no digital template available -- leave the photo
@@ -160,6 +161,17 @@ module.exports = async (req, res) => {
         ok: true,
         held: true,
         message: 'No Digital template available yet — left pending for manual review instead of auto-publishing as Physical.'
+      });
+      return;
+    }
+
+    if (product.failed) {
+      // manual override picked a type that couldn't actually be
+      // fulfilled (e.g. forced Digital but no template exists) -- report
+      // that clearly instead of silently publishing as something else.
+      res.status(200).json({
+        ok: false,
+        diagnostics: product.diagnostics
       });
       return;
     }
@@ -224,9 +236,34 @@ async function getTargetStorePage() {
 
 // ---- Top-level publish flow: try DIGITAL-via-template, fall back to
 // PHYSICAL-create only if that's not possible right now. ----
-async function publishProduct(details, allowPhysicalFallback = true) {
+async function publishProduct(details, allowPhysicalFallback = true, forceType = null) {
   var diagnostics = [];
 
+  // Manual override: skip auto-detection entirely when the admin/uploader
+  // explicitly picked a type instead of leaving it on auto-detect.
+  if (forceType === 'physical') {
+    diagnostics.push('Product type: FORCED to PHYSICAL (manual selection)');
+    const created = await createPhysicalProduct(details, diagnostics);
+    return { id: created.id, url: created.url, type: 'PHYSICAL', diagnostics: diagnostics.join(' | ') };
+  }
+  if (forceType === 'digital') {
+    const template = await findDigitalTemplate();
+    if (!template) {
+      diagnostics.push('Product type: FORCED to DIGITAL but no unused template found (tag "' + TEMPLATE_TAG + '") — nothing published.');
+      return { id: null, url: null, type: null, diagnostics: diagnostics.join(' | '), failed: true };
+    }
+    diagnostics.push('Product type: FORCED to DIGITAL (patching template ' + template.id + ')');
+    try {
+      const patched = await patchDigitalTemplate(template, details, diagnostics);
+      diagnostics.push('Product type: DIGITAL — success');
+      return { id: patched.id, url: patched.url, type: 'DIGITAL', diagnostics: diagnostics.join(' | ') };
+    } catch (templateErr) {
+      diagnostics.push('Product type: FORCED to DIGITAL but the patch failed: ' + templateErr.message + ' — nothing published.');
+      return { id: null, url: null, type: null, diagnostics: diagnostics.join(' | '), failed: true };
+    }
+  }
+
+  // Auto-detect (default): try Digital first, fall back to Physical.
   const template = await findDigitalTemplate();
   if (template) {
     diagnostics.push('Product type: attempting DIGITAL (patching template ' + template.id + ')');
