@@ -558,13 +558,4 @@ function squarespaceHeaders() {
   };
 }
 
-// Explicitly request a longer execution window. Vercel functions default
-// to a short timeout (as low as 10-15s) regardless of plan tier unless a
-// file requests more — this flow makes several sequential calls to
-// Squarespace and Supabase in one request (product create/update, price,
-// image upload, digital file upload, inventory attempts), which can add
-// up past the default before ever hitting a real error. 60s gives real
-// headroom without reserving the full 300s Pro allows. This has to come
-// AFTER module.exports is assigned the handler function above, or it
-// gets wiped out by that assignment.
 module.exports.config = { maxDuration: 60 };
