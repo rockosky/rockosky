@@ -193,30 +193,31 @@ function supabaseHeaders() {
 // Looks up an existing store page/collection whose name contains BOTH
 // the given city and season, falling back to city-only if no exact
 // combined match is found.
-async function getOrCreateStorePage(city, season) {
+// Every published product — Digital or the Physical fallback alike —
+// lands on this one page: ketchupfiles.com/street-style-contributors.
+// Matched by URL slug rather than title, since that's the actual part
+// of the address ("/street-style-contributors/p/...") that has to be
+// right, and titles/slugs don't always match exactly.
+const TARGET_STORE_PAGE_SLUG = 'street-style-contributors';
+
+async function getTargetStorePage() {
   const listRes = await fetch('https://api.squarespace.com/1.0/commerce/store_pages', {
     headers: squarespaceHeaders()
   });
   const list = await listRes.json();
   const pages = list.storePages || list.pages || list.results || (Array.isArray(list) ? list : []);
 
-  const cityLower = (city || '').toLowerCase().trim();
-  const seasonLower = (season || '').toLowerCase().trim();
-
-  var existing = pages.find((p) => {
-    if (!p || !p.title) return false;
-    const nameLower = p.title.toLowerCase();
-    return nameLower.includes(cityLower) && (seasonLower ? nameLower.includes(seasonLower) : true);
+  const existing = pages.find((p) => {
+    if (!p) return false;
+    const slug = (p.urlSlug || p.identifier || '').toLowerCase();
+    const title = (p.title || '').toLowerCase();
+    return slug === TARGET_STORE_PAGE_SLUG || title.includes(TARGET_STORE_PAGE_SLUG.replace(/-/g, ' '));
   });
-
-  if (!existing) {
-    existing = pages.find((p) => p && p.title && p.title.toLowerCase().includes(cityLower));
-  }
 
   if (existing && existing.id) return existing.id;
 
   throw new Error(
-    `No store page found containing both "${city}" and "${season}" in its name. ` +
+    `Could not find the "${TARGET_STORE_PAGE_SLUG}" store page. ` +
     `Available page names: ${pages.map(p => p && p.title).filter(Boolean).join(', ') || '(none found)'}.`
   );
 }
@@ -365,7 +366,7 @@ async function createPhysicalProduct(details, diagnostics) {
   const fullDescription = buildDescription(details);
   var hashtagList = (details.hashtags || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean);
 
-  const storePageId = await getOrCreateStorePage(details.city, details.season);
+  const storePageId = await getTargetStorePage();
 
   const body = {
     type: 'PHYSICAL',
