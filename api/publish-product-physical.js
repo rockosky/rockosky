@@ -1,22 +1,4 @@
-// /api/publish-product-physical.js
-//
-// Alternate publish path using a PHYSICAL product instead of DIGITAL.
-// Squarespace's confirmed 405-on-create limit is specifically for
-// type: 'DIGITAL' -- physical products go through the standard
-// inventory/shipping pipeline, not the digital-fulfillment one, so a
-// plain POST create is expected to work with no template-duplication
-// workaround needed. This has NOT been confirmed against a live call
-// yet either -- test this alongside publish-product.js and see which
-// one actually succeeds against your real store.
-//
-// NOTE: a physical product implies Squarespace will want shipping/
-// inventory fields (weight, quantity, etc). Since what's actually
-// being sold is a digital download, this sets inventory to
-// "unlimited" and zero weight/shipping -- the physical wrapper is
-// just to route around the DIGITAL-create restriction, not to
-// actually ship anything. If Squarespace still requires real shipping
-// config despite these zeroed values, that would be the next thing to
-// adjust once tested live.
+
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -61,6 +43,7 @@ module.exports = async (req, res) => {
     // 2. Straightforward create -- no template/duplicate needed for
     // PHYSICAL type
     const product = await createPhysicalProduct({
+      photoId: photo.id,
       title: photo.title,
       description: photo.description || '',
       priceCents: photo.price_cents,
@@ -105,13 +88,14 @@ function squarespaceHeaders() {
   };
 }
 
-async function createPhysicalProduct({ title, description, priceCents, city, season, hashtags, socialUrl, photographerName, imageUrl }) {
+async function createPhysicalProduct({ photoId, title, description, priceCents, city, season, hashtags, socialUrl, photographerName, imageUrl }) {
   const hashtagList = (hashtags || '').split(',').map(function (t) { return t.trim(); }).filter(Boolean);
   const fullDescription = description
     + '\n\nLocation: ' + city + ' \u2014 ' + season
     + (photographerName ? '\n\nPhoto by ' + photographerName : '')
     + (hashtagList.length ? '\n\n' + hashtagList.map(function (t) { return '#' + t.replace(/^#/, ''); }).join(' ') : '')
-    + (socialUrl ? '\n\nProfile / Link: ' + socialUrl : '');
+    + (socialUrl ? '\n\nProfile / Link: ' + socialUrl : '')
+    + '\n\n<!-- kf-photo-id: ' + photoId + ' -->';
 
   const body = {
     type: 'PHYSICAL',
@@ -122,7 +106,7 @@ async function createPhysicalProduct({ title, description, priceCents, city, sea
     variants: [
       {
         pricing: { basePrice: { currency: 'USD', value: (priceCents / 100).toFixed(2) } },
-        sku: 'KF-' + Date.now(),
+        sku: 'KF-' + photoId,
         // Zeroed shipping/weight + unlimited stock: nothing physical is
         // actually being shipped, this is a digital download riding on
         // the physical-product creation path to route around the
