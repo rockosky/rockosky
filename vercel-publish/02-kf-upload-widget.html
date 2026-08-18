@@ -622,14 +622,14 @@ html, body { overflow-x: hidden; max-width: 100%; }
 <script>
 (function(){
   // ---- CONFIG ----
-  var SUPABASE_URL = "https://lfbtreaojwxxwuwhssba.supabase.co";
-  var SUPABASE_ANON_KEY = "sb_publishable_KX1Hpau0Lc7M_n1snlYbEw_lnr_GfL9";
+  var SUPBASE_URL = "https://lfbtreaojwxxwuwhssba.supbase.co";
+  var SUPBASE_ANON_KEY = "sb_publishable_KX1Hpau0Lc7M_n1snlYbEw_lnr_GfL9";
   var BUCKET = "Ketchup Files UPLOADS";
   var ORIGINALS_BUCKET = "Ketchup Files ORIGINALS"; // PRIVATE bucket — never public, only ever accessed via a signed URL sent to an actual buyer
   var PUBLISH_ENDPOINT = "https://rockosky.vercel.app/api/publish-product";
   // ----------------
 
-  var sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  var sb = supbase.createClient(SUPBASE_URL, SUPBASE_ANON_KEY);
   var isSignup = true;
   var chosenFiles = [];
 
