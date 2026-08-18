@@ -1,7 +1,7 @@
 
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SUPBASE_URL = process.env.SUPBASE_URL;
+const SUPBASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY;
 const SQUARESPACE_API_KEY = process.env.SQUARESPACE_API_KEY;
 const BUCKET = "Ketchup Files UPLOADS";
 
@@ -28,8 +28,8 @@ module.exports = async (req, res) => {
   try {
     // 1. Load the photo row (service role bypasses RLS)
     const photoRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
-      { headers: supabaseHeaders() }
+      `${subase_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
+      { headers: subaseHeaders() }
     );
     const photos = await photoRes.json();
     const photo = photos && photos[0];
@@ -38,7 +38,7 @@ module.exports = async (req, res) => {
       throw new Error('Photo is missing title, city, season, or price -- fill these in before publishing');
     }
 
-    const imageUrl = `${SUPABASE_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
+    const imageUrl = `${subase_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
 
     // 2. Straightforward create -- no template/duplicate needed for
     // PHYSICAL type
@@ -55,10 +55,10 @@ module.exports = async (req, res) => {
       imageUrl
     });
 
-    // 3. Write the result back to Supabase
-    await fetch(`${SUPABASE_URL}/rest/v1/photos?id=eq.${photo_id}`, {
+    // 3. Write the result back to subase
+    await fetch(`${subase_URL}/rest/v1/photos?id=eq.${photo_id}`, {
       method: 'PATCH',
-      headers: { ...supabaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      headers: { ...subaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
       body: JSON.stringify({
         status: 'published',
         squarespace_product_id: product.id,
@@ -74,10 +74,10 @@ module.exports = async (req, res) => {
   }
 };
 
-function supabaseHeaders() {
+function subaseHeaders() {
   return {
-    apikey: SUPABASE_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+    apikey: subase_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${subase_SERVICE_ROLE_KEY}`
   };
 }
 
