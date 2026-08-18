@@ -1,5 +1,4 @@
 
-
 const SUPBASE_URL = process.env.SUPBASE_URL;
 const SUPBASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY;
 const SQUARESPACE_API_KEY = process.env.SQUARESPACE_API_KEY;
@@ -158,11 +157,18 @@ function squarespaceHeaders() {
 }
 
 // Looks up the hidden DIGITAL product tagged kf-template-unused.
-// Logs the raw response so the real filter query-param shape can be
-// confirmed/adjusted against what Squarespace actually returns.
+// FIXED: originally relied on a guessed "filter=tag,value" query
+// parameter that Squarespace's real API doesn't seem to honor --
+// confirmed live, it silently returned zero results even though the
+// tag is genuinely present on the product. This version instead
+// fetches the product list directly and filters for the tag in code,
+// which doesn't depend on Squarespace supporting that specific query
+// shape at all. Logs the raw response so this can be re-checked if
+// the template still isn't found (e.g. if it's on a later page and
+// pagination needs handling).
 async function findTemplateProduct() {
   const listRes = await fetch(
-    `https://api.squarespace.com/1.0/commerce/products?filter=tag,${encodeURIComponent(TEMPLATE_TAG)}`,
+    'https://api.squarespace.com/1.0/commerce/products',
     { headers: squarespaceHeaders() }
   );
   const text = await listRes.text();
