@@ -1,4 +1,41 @@
-
+// /api/publish-product.js
+//
+// TWO-PHASE flow, matching what the upload widget already expects:
+//
+// PHASE 1 -- auto-create (called automatically by the upload widget
+// right after every submission, body: { photo_id, auto: true }):
+// finds the hidden Squarespace DIGITAL product template (confirmed:
+// lives in the "street-style-contributors" collection, slug/tag
+// "kf-template-unused"), duplicates it, moves the duplicate into the
+// correct city/season collection, fills in the real content -- but
+// creates it HIDDEN (isVisible: false). Saves squarespace_product_id/
+// url back to the photo row immediately. Does NOT touch photo status
+// -- the photo stays 'pending' for normal admin review either way.
+// If anything isn't ready (no template, Squarespace error, etc), this
+// responds { ok: true, held: true } rather than an error -- non-fatal,
+// contributor never sees a scary message, admin review still covers
+// it normally, and Phase 2 will just do the full creation itself later.
+//
+// PHASE 2 -- finalize & reveal (called when you click Approve &
+// Publish, body: { photo_id }, no auto flag): if Phase 1 already
+// created the hidden product, this just flips isVisible: true and
+// refreshes the content in case anything changed since upload --
+// fast, since the heavy lifting already happened. If Phase 1 never
+// ran or was held, this does the full creation right now instead.
+// Either way, ends with photo status -> 'published'.
+//
+// WHY DUPLICATE INSTEAD OF CREATE: Squarespace's Commerce API returns
+// a 405 if you try to POST a brand-new DIGITAL-type product directly
+// -- confirmed. The workaround: keep one hidden/unused DIGITAL product
+// as a template (never shown on the storefront) and duplicate IT
+// instead -- duplication is a different, less-restricted operation.
+//
+// NOTE: the exact duplicate-product endpoint/response shape below
+// follows Squarespace's documented Commerce Advanced API as of early
+// 2026 but has NOT been confirmed against a live call yet -- every
+// Squarespace response is logged raw specifically so the first real
+// run can be checked against what's actually returned, and this
+// adjusted if the real shape differs.
 
 const SUPBASE_URL = process.env.SUPBASE_URL;
 const SUPBASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY;
@@ -60,7 +97,7 @@ module.exports = async (req, res) => {
     // (hidden). Just flip it visible and refresh content -- no need
     // to find the template or duplicate again. ----
     if (photo.squarespace_product_id && !auto) {
-      const storePageId = await getOrCreateStorePage(photo.city);
+      const storePageId = await getOrCreateStorePage(photo.city, photo.season);
       const product = await updateProduct(photo.squarespace_product_id, {
         photoId: photo.id,
         title: photo.title,
@@ -95,7 +132,7 @@ module.exports = async (req, res) => {
     // (hidden) or Phase 2 running standalone (visible immediately,
     // since Phase 1 either never ran or was held). No search needed
     // anymore -- TEMPLATE_PRODUCT_ID is the confirmed real ID. ----
-    const storePageId = await getOrCreateStorePage(photo.city);
+    const storePageId = await getOrCreateStorePage(photo.city, photo.season);
     const newProductId = await duplicateProduct(TEMPLATE_PRODUCT_ID);
     const product = await updateProduct(newProductId, {
       photoId: photo.id,
@@ -160,18 +197,18 @@ function squarespaceHeaders() {
   };
 }
 
-// Finds an existing collection/store page for this photo's city.
-// FIXED: this used to try creating a new store page if no exact match
-// was found -- confirmed live that Squarespace's API flatly returns
-// 405 Method Not Allowed for POST on this endpoint, so creation is
-// simply not possible via the API, only reading existing ones. Also
-// fixed the match itself: it was looking for an exact string like
-// "New York Fashion Week SS27", but your real collections are named
-// things like "NEW YORK FASHION WEEK STREET STYLE 2026" -- no season
-// in the name, city + year instead. Now matches on the city name being
-// contained anywhere in the title (case-insensitive), which works with
-// your actual naming convention.
-async function getOrCreateStorePage(city) {
+// Finds an existing collection/store page for this photo's city and
+// season. FIXED: this used to try creating a new store page if no
+// exact match was found -- confirmed live that Squarespace's API
+// flatly returns 405 Method Not Allowed for POST on this endpoint, so
+// creation is simply not possible via the API, only reading existing
+// ones -- any new collection (like "NEW YORK FASHION WEEK SS27 SPRING
+// SUMMER 2026") has to be created manually in Squarespace first.
+// Matching now prefers a collection containing BOTH the city and
+// season (so a New York SS27 photo lands in the SS27-specific
+// collection, not just any New York collection), falling back to
+// city-only if no season-specific match exists yet.
+async function getOrCreateStorePage(city, season) {
   const listRes = await fetch('https://api.squarespace.com/1.0/commerce/store_pages', {
     headers: squarespaceHeaders()
   });
@@ -180,21 +217,31 @@ async function getOrCreateStorePage(city) {
   if (!listRes.ok) throw new Error(`Squarespace store page lookup failed: ${listText}`);
   const list = JSON.parse(listText);
   const cityLower = city.toLowerCase();
+  const seasonLower = (season || '').toLowerCase();
 
-  // Prefer an enabled collection whose title contains the city name.
-  const match = (list.storePages || []).find(
+  // Best: enabled collection with both city AND season in the title.
+  if (seasonLower) {
+    const exact = (list.storePages || []).find(
+      p => p.isEnabled && p.title
+        && p.title.toLowerCase().includes(cityLower)
+        && p.title.toLowerCase().includes(seasonLower)
+    );
+    if (exact) return exact.id;
+  }
+
+  // Next best: enabled collection matching just the city.
+  const cityMatch = (list.storePages || []).find(
     p => p.isEnabled && p.title && p.title.toLowerCase().includes(cityLower)
   );
-  if (match) return match.id;
+  if (cityMatch) return cityMatch.id;
 
-  // Fall back to any match at all (even disabled) rather than failing
-  // outright, in case the right collection is temporarily disabled.
+  // Last resort: any match at all, even disabled.
   const anyMatch = (list.storePages || []).find(
     p => p.title && p.title.toLowerCase().includes(cityLower)
   );
   if (anyMatch) return anyMatch.id;
 
-  throw new Error(`No Squarespace collection found matching city "${city}" -- collections can't be created via the API, so create one manually in Squarespace first (e.g. "${city.toUpperCase()} FASHION WEEK 2026")`);
+  throw new Error(`No Squarespace collection found matching city "${city}" -- collections can't be created via the API, so create one manually in Squarespace first (e.g. "${city.toUpperCase()} FASHION WEEK ${season || ''} 2026")`);
 }
 
 // Duplicates the template product. This is the step that avoids the
