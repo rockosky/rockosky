@@ -1,7 +1,7 @@
 
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supbase_URL = process.env.supbase_URL;
+const supbase_SERVICE_ROLE_KEY = process.env.supbase_SERVICE_ROLE_KEY;
 const SQUARESPACE_API_KEY = process.env.SQUARESPACE_API_KEY;
 const TEMPLATE_TAG = 'kf-template-unused';
 const BUCKET = "Ketchup Files UPLOADS";
@@ -10,7 +10,7 @@ module.exports = async (req, res) => {
   // ---- CORS: without this, the browser blocks the response before
   // the Admin dashboard ever sees it -- shows up client-side as a
   // generic "Failed to fetch" with no useful detail, even though the
-  // Squarespace/Supabase calls underneath may have partially run.
+  // Squarespace/supbase calls underneath may have partially run.
   // This was confirmed missing from the previous version. ----
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -34,8 +34,8 @@ module.exports = async (req, res) => {
   try {
     // 1. Load the photo row (service role key bypasses RLS)
     const photoRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
-      { headers: supabaseHeaders() }
+      `${supbase_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
+      { headers: supbaseHeaders() }
     );
     const photos = await photoRes.json();
     const photo = photos && photos[0];
@@ -45,7 +45,7 @@ module.exports = async (req, res) => {
       throw new Error('Photo is missing title, city, season, or price -- fill these in before publishing');
     }
 
-    const imageUrl = `${SUPABASE_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
+    const imageUrl = `${supbase_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
     const collectionName = `${photo.city} Fashion Week ${photo.season}`;
 
     // ---- PHASE 2 fast path: Phase 1 already created this product
@@ -136,17 +136,17 @@ module.exports = async (req, res) => {
 };
 
 async function patchPhoto(photoId, fields) {
-  await fetch(`${SUPABASE_URL}/rest/v1/photos?id=eq.${photoId}`, {
+  await fetch(`${supbase_URL}/rest/v1/photos?id=eq.${photoId}`, {
     method: 'PATCH',
-    headers: { ...supabaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+    headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
     body: JSON.stringify(fields)
   });
 }
 
-function supabaseHeaders() {
+function supbaseHeaders() {
   return {
-    apikey: SUPABASE_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+    apikey: supbase_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${supbase_SERVICE_ROLE_KEY}`
   };
 }
 
@@ -222,7 +222,7 @@ async function duplicateProduct(templateId) {
 // price, image, and tags; moves it into the correct city/season
 // collection; and sets visibility explicitly (false = hidden draft
 // created at upload time, true = live and shown on the storefront).
-// SKU and a hidden HTML comment both encode the Supabase photo_id, so
+// SKU and a hidden HTML comment both encode the supbase photo_id, so
 // any live product can be traced straight back to its source row --
 // SKU is visible in the Squarespace admin, the comment is invisible on
 // the storefront but present in the raw description/API data.
