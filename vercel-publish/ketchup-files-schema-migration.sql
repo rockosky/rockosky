@@ -1,9 +1,4 @@
--- ============================================================
--- KETCHUP FILES — schema migration
--- Safe to run all at once, and safe to re-run (every statement is
--- idempotent: IF NOT EXISTS / ADD COLUMN IF NOT EXISTS throughout).
--- Run this in the Supabase SQL editor for project lfbtreaojwxxwuwhssba.
--- ============================================================
+
 
 -- ---- photos: per-upload category, rejection reason, and the
 -- Squarespace publish trail (product id/url + when it went live) ----
@@ -13,30 +8,15 @@ ALTER TABLE photos ADD COLUMN IF NOT EXISTS squarespace_product_id text;
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS squarespace_product_url text;
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS published_at timestamptz;
 
--- ---- photos: fashion-specific sub-tag on photo/video uploads (Runway,
--- Backstage, Street Style, First Looks, Interview, Portraits,
--- Journalist), plus the pieces behind the auto-filled title template
--- ("Street style photo of {guest} at the {designer} show, {season}") —
--- guest_name/designer_name are stored separately from the composed
--- `title` so they can drive autocomplete suggestions (distinct past
--- values) without parsing them back out of free text. guest_name is
--- deliberately left NULL rather than storing the literal word "Guest"
--- when a contributor doesn't know who's in the photo — "Guest" is a
--- display-time default, not real data. ----
+
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS subcategory text;
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS guest_name text;
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS designer_name text;
 
--- ---- photos: the clean, non-watermarked original — lives in a
--- PRIVATE bucket ("Ketchup Files ORIGINALS"), never the public one.
--- This is what actually gets emailed to someone after they buy; the
--- public bucket only ever holds the watermarked display copy. Rows
--- uploaded before this existed will have this as NULL. ----
+
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS original_file_path text;
 
--- ---- order_deliveries: audit trail for the purchase -> email-the-
--- original pipeline. Also doubles as a dedupe guard so a retried
--- Squarespace webhook doesn't send the same buyer two emails. ----
+
 CREATE TABLE IF NOT EXISTS order_deliveries (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   squarespace_order_id text UNIQUE NOT NULL,
@@ -47,14 +27,7 @@ CREATE TABLE IF NOT EXISTS order_deliveries (
   delivered_at timestamptz DEFAULT now()
 );
 
--- Was created above without RLS enabled — Supabase's own security
--- advisor correctly flags any public table with RLS off as CRITICAL,
--- since it means anyone with the anon key can read/write every row
--- with no restriction at all. This table only needs to be written by
--- the service-role key (which bypasses RLS regardless), so simply
--- enabling RLS with no permissive policies locks it down completely
--- for anyone using the anon key while leaving server-side access
--- untouched.
+
 ALTER TABLE order_deliveries ENABLE ROW LEVEL SECURITY;
 
 -- ---- La Semana de la Moda export tracking — lets the admin dashboard
