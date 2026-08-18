@@ -3,16 +3,16 @@
 const SUPBASE_URL = process.env.SUPBASE_URL;
 const SUPBASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY;
 const SQUARESPACE_API_KEY = process.env.SQUARESPACE_API_KEY;
-const TEMPLATE_TAG = 'kf-template-unused';
-// FIXED: the products LIST endpoint (used to search for this template
-// by tag) reliably returned an empty product array even with the
-// product confirmed visible, tagged, and existing -- a genuine
-// Squarespace-side quirk with that specific endpoint, not something in
-// our request. Sidestepped entirely by hardcoding the template's real
-// internal ID (confirmed directly from its Squarespace admin URL:
-// https://ketchupfiles.squarespace.com/config/commerce/products/digital/6a83eec2762f55650d9d3781)
-// and duplicating it directly -- no search, no list call, no guessing.
-const TEMPLATE_PRODUCT_ID = '6a83eec2762f55650d9d3781';
+
+// ---- POOL OF BLANK HIDDEN DIGITAL PRODUCTS ----
+// Add more IDs here as the pool runs low. Get each one's ID from its
+// Squarespace admin edit URL, same way the first one was found:
+// https://ketchupfiles.squarespace.com/config/commerce/products/digital/{ID}
+const TEMPLATE_POOL_IDS = [
+  '6a83eec2762f55650d9d3781'
+  // add more here, one string per blank pool product
+];
+
 const BUCKET = "Ketchup Files UPLOADS";
 
 module.exports = async (req, res) => {
@@ -91,12 +91,12 @@ module.exports = async (req, res) => {
       return;
     }
 
-    // ---- First time creating this product, for either Phase 1
-    // (hidden) or Phase 2 running standalone (visible immediately,
-    // since Phase 1 either never ran or was held). No search needed
-    // anymore -- TEMPLATE_PRODUCT_ID is the confirmed real ID. ----
+    // ---- First time claiming a product for this photo, for either
+    // Phase 1 (hidden) or Phase 2 running standalone (visible
+    // immediately, since Phase 1 either never ran or was held). Claims
+    // the next unused pool item instead of creating/duplicating. ----
     const storePageId = await getOrCreateStorePage(photo.city, photo.season);
-    const newProductId = await duplicateProduct(TEMPLATE_PRODUCT_ID);
+    const newProductId = await claimNextPoolProduct();
     const product = await updateProduct(newProductId, {
       photoId: photo.id,
       title: photo.title,
@@ -215,19 +215,24 @@ async function getOrCreateStorePage(city, season) {
   throw new Error(`No Squarespace collection found matching city "${city}" -- collections can't be created via the API, so create one manually in Squarespace first (e.g. "${city.toUpperCase()} FASHION WEEK ${season || ''} 2026")`);
 }
 
-// Duplicates the template product. This is the step that avoids the
-// 405-on-raw-create limit -- duplication of an existing DIGITAL
-// product is allowed even though creating one from nothing isn't.
-async function duplicateProduct(templateId) {
-  const dupRes = await fetch(
-    `https://api.squarespace.com/1.0/commerce/products/${templateId}/duplicate`,
-    { method: 'POST', headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' } }
+// Claims the next pool product not already in use by an existing
+// photo. "In use" is tracked via OUR Supabase data (which pool IDs
+// already appear in photos.squarespace_product_id), not by asking
+// Squarespace what's claimed -- sidesteps the unreliable products-list
+// endpoint entirely.
+async function claimNextPoolProduct() {
+  const usedRes = await fetch(
+    `${SUPBASE_URL}/rest/v1/photos?squarespace_product_id=not.is.null&select=squarespace_product_id`,
+    { headers: supabaseHeaders() }
   );
-  const text = await dupRes.text();
-  console.log('duplicateProduct raw response:', text);
-  if (!dupRes.ok) throw new Error(`Squarespace product duplicate failed: ${text}`);
-  const data = JSON.parse(text);
-  return data.id;
+  const usedRows = await usedRes.json();
+  const usedIds = new Set((usedRows || []).map(r => r.squarespace_product_id));
+
+  const free = TEMPLATE_POOL_IDS.find(id => !usedIds.has(id));
+  if (!free) {
+    throw new Error('Pool of blank digital products is exhausted -- create more blank hidden DIGITAL products in Squarespace and add their IDs to TEMPLATE_POOL_IDS');
+  }
+  return free;
 }
 
 // Overwrites the product with this photo's real title, description,
