@@ -34,7 +34,7 @@ module.exports = async (req, res) => {
     // Avoid double-sending if Squarespace retries the same webhook.
     const already = await fetch(
       `${SUPBASE_URL}/rest/v1/order_deliveries?squarespace_order_id=eq.${encodeURIComponent(orderId)}&select=id`,
-      { headers: supabaseHeaders() }
+      { headers: supbaseHeaders() }
     ).then(r => r.json());
     if (already && already.length) {
       res.status(200).json({ ok: true, skipped: 'Already delivered for this order' });
@@ -50,7 +50,7 @@ module.exports = async (req, res) => {
     const orFilter = productIds.map(id => `squarespace_product_id.eq.${id}`).join(',');
     const photosRes = await fetch(
       `${SUPBASE_URL}/rest/v1/photos?or=(${orFilter})&select=id,title,original_file_path,squarespace_product_id`,
-      { headers: supabaseHeaders() }
+      { headers: supbaseHeaders() }
     );
     const photos = await photosRes.json();
 
@@ -79,7 +79,7 @@ module.exports = async (req, res) => {
     // visible somewhere instead of just silently not sending anything.
     await fetch(`${SUPBASE_URL}/rest/v1/order_deliveries`, {
       method: 'POST',
-      headers: { ...supabaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
       body: JSON.stringify({
         squarespace_order_id: orderId,
         customer_email: buyerEmail,
@@ -119,7 +119,7 @@ async function createSignedUrl(path) {
       `${SUPBASE_URL}/storage/v1/object/sign/${encodeURIComponent(ORIGINALS_BUCKET)}/${path}`,
       {
         method: 'POST',
-        headers: { ...supabaseHeaders(), 'Content-Type': 'application/json' },
+        headers: { ...supbaseHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ expiresIn: SIGNED_URL_EXPIRY_SECONDS })
       }
     );
@@ -159,7 +159,7 @@ async function sendDeliveryEmail(toEmail, links, missing) {
   });
 }
 
-function supabaseHeaders() {
+function supbaseHeaders() {
   return {
     apikey: SUPBASE_SERVICE_ROLE_KEY,
     Authorization: `Bearer ${SUPBASE_SERVICE_ROLE_KEY}`
