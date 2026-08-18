@@ -34,7 +34,7 @@ module.exports = async (req, res) => {
     // 1. Load the photo row (service role key bypasses RLS)
     const photoRes = await fetch(
       `${SUPBASE_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
-      { headers: supabaseHeaders() }
+      { headers: supbaseHeaders() }
     );
     const photos = await photoRes.json();
     const photo = photos && photos[0];
@@ -137,12 +137,12 @@ module.exports = async (req, res) => {
 async function patchPhoto(photoId, fields) {
   await fetch(`${SUPBASE_URL}/rest/v1/photos?id=eq.${photoId}`, {
     method: 'PATCH',
-    headers: { ...supabaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+    headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
     body: JSON.stringify(fields)
   });
 }
 
-function supabaseHeaders() {
+function supbaseHeaders() {
   return {
     apikey: SUPBASE_SERVICE_ROLE_KEY,
     Authorization: `Bearer ${SUPBASE_SERVICE_ROLE_KEY}`
@@ -156,16 +156,7 @@ function squarespaceHeaders() {
   };
 }
 
-// Looks up the hidden DIGITAL product tagged kf-template-unused.
-// FIXED: originally relied on a guessed "filter=tag,value" query
-// parameter that Squarespace's real API doesn't seem to honor --
-// confirmed live, it silently returned zero results even though the
-// tag is genuinely present on the product. This version instead
-// fetches the product list directly and filters for the tag in code,
-// which doesn't depend on Squarespace supporting that specific query
-// shape at all. Logs the raw response so this can be re-checked if
-// the template still isn't found (e.g. if it's on a later page and
-// pagination needs handling).
+
 async function findTemplateProduct() {
   const listRes = await fetch(
     'https://api.squarespace.com/1.0/commerce/products',
