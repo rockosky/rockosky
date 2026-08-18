@@ -4,7 +4,7 @@ Go through this top to bottom, in order. Each section only matters if the one ab
 
 ---
 
-## 1. SUPABASE (database + storage)
+## 1. SUPBASE (database + storage)
 
 - [ ] Go to Supabase → SQL Editor → run `ketchup-files-schema-migration.sql` (the whole file, safe to re-run).
 - [ ] Go to Table Editor → `photos` table → confirm columns exist: `category`, `subcategory`, `guest_name`, `designer_name`, `original_file_path`, `squarespace_product_id`, `squarespace_product_url`, `published_at`.
