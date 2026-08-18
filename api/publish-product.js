@@ -1,24 +1,34 @@
-
 // /api/publish-product.js
 //
-// Approve & Publish handler: takes a photo_id, finds the hidden
-// Squarespace DIGITAL product template (confirmed: lives in the
-// "street-style-contributors" collection, slug/tag "kf-template-
-// unused"), duplicates it, moves the duplicate into the correct city/
-// season collection (e.g. "New York Fashion Week 2026" -- confirmed
-// this second step from an earlier working product that lived in that
-// collection, not in street-style-contributors), updates the duplicate
-// with this photo's title/description/price/image/tags, then writes
-// the resulting product id/url back to Supabase with status ->
-// 'published'.
+// TWO-PHASE flow, matching what the upload widget already expects:
+//
+// PHASE 1 -- auto-create (called automatically by the upload widget
+// right after every submission, body: { photo_id, auto: true }):
+// finds the hidden Squarespace DIGITAL product template (confirmed:
+// lives in the "street-style-contributors" collection, slug/tag
+// "kf-template-unused"), duplicates it, moves the duplicate into the
+// correct city/season collection, fills in the real content -- but
+// creates it HIDDEN (isVisible: false). Saves squarespace_product_id/
+// url back to the photo row immediately. Does NOT touch photo status
+// -- the photo stays 'pending' for normal admin review either way.
+// If anything isn't ready (no template, Squarespace error, etc), this
+// responds { ok: true, held: true } rather than an error -- non-fatal,
+// contributor never sees a scary message, admin review still covers
+// it normally, and Phase 2 will just do the full creation itself later.
+//
+// PHASE 2 -- finalize & reveal (called when you click Approve &
+// Publish, body: { photo_id }, no auto flag): if Phase 1 already
+// created the hidden product, this just flips isVisible: true and
+// refreshes the content in case anything changed since upload --
+// fast, since the heavy lifting already happened. If Phase 1 never
+// ran or was held, this does the full creation right now instead.
+// Either way, ends with photo status -> 'published'.
 //
 // WHY DUPLICATE INSTEAD OF CREATE: Squarespace's Commerce API returns
 // a 405 if you try to POST a brand-new DIGITAL-type product directly
 // -- confirmed. The workaround: keep one hidden/unused DIGITAL product
 // as a template (never shown on the storefront) and duplicate IT
 // instead -- duplication is a different, less-restricted operation.
-// The duplicate then gets moved out of street-style-contributors into
-// the real city/season collection and PUT with the real content.
 //
 // NOTE: the exact duplicate-product endpoint/response shape below
 // follows Squarespace's documented Commerce Advanced API as of early
@@ -52,7 +62,7 @@ module.exports = async (req, res) => {
     return;
   }
 
-  const { photo_id } = req.body || {};
+  const { photo_id, auto } = req.body || {};
   if (!photo_id) {
     res.status(400).json({ error: 'photo_id is required' });
     return;
@@ -68,26 +78,57 @@ module.exports = async (req, res) => {
     const photo = photos && photos[0];
     if (!photo) throw new Error('Photo not found');
     if (!photo.title || !photo.city || !photo.season || photo.price_cents == null) {
+      if (auto) { res.status(200).json({ ok: true, held: true, reason: 'missing required fields' }); return; }
       throw new Error('Photo is missing title, city, season, or price -- fill these in before publishing');
     }
 
     const imageUrl = `${SUPABASE_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
+    const collectionName = `${photo.city} Fashion Week ${photo.season}`;
 
-    // 2. Find the hidden template product by its tag
+    // ---- PHASE 2 fast path: Phase 1 already created this product
+    // (hidden). Just flip it visible and refresh content -- no need
+    // to find the template or duplicate again. ----
+    if (photo.squarespace_product_id && !auto) {
+      const storePageId = await getOrCreateStorePage(collectionName);
+      const product = await updateProduct(photo.squarespace_product_id, {
+        title: photo.title,
+        description: photo.description || '',
+        priceCents: photo.price_cents,
+        city: photo.city,
+        season: photo.season,
+        hashtags: photo.hashtags || '',
+        socialUrl: photo.social_url || '',
+        photographerName: photo.photographer_name || '',
+        storePageId,
+        imageUrl,
+        isVisible: true
+      });
+      await patchPhoto(photo_id, {
+        status: 'published',
+        squarespace_product_url: product.url,
+        published_at: new Date().toISOString()
+      });
+      res.status(200).json({ ok: true, url: product.url });
+      return;
+    }
+
+    // ---- Phase 1 already ran and this is just another auto call on
+    // the same photo (e.g. a retry) -- nothing more to do. ----
+    if (photo.squarespace_product_id && auto) {
+      res.status(200).json({ ok: true, held: false, url: photo.squarespace_product_url });
+      return;
+    }
+
+    // ---- First time creating this product, for either Phase 1
+    // (hidden) or Phase 2 running standalone (visible immediately,
+    // since Phase 1 either never ran or was held). ----
     const templateId = await findTemplateProduct();
     if (!templateId) {
+      if (auto) { res.status(200).json({ ok: true, held: true, reason: 'template missing' }); return; }
       throw new Error(`No product tagged "${TEMPLATE_TAG}" found in Squarespace -- create one hidden DIGITAL product with that exact tag first`);
     }
 
-    // 3. Find or create the destination collection for this photo's
-    // city + season (e.g. "New York Fashion Week 2026") -- confirmed
-    // from the earlier working product, which lived in a collection
-    // like this, separate from where the hidden template itself sits.
-    const collectionName = `${photo.city} Fashion Week ${photo.season}`;
     const storePageId = await getOrCreateStorePage(collectionName);
-
-    // 4. Duplicate the template, then move the duplicate into that
-    // collection and overwrite its content with this photo's real data
     const newProductId = await duplicateProduct(templateId);
     const product = await updateProduct(newProductId, {
       title: photo.title,
@@ -99,27 +140,43 @@ module.exports = async (req, res) => {
       socialUrl: photo.social_url || '',
       photographerName: photo.photographer_name || '',
       storePageId,
-      imageUrl
+      imageUrl,
+      isVisible: !auto
     });
 
-    // 5. Write the result back to Supabase
-    await fetch(`${SUPABASE_URL}/rest/v1/photos?id=eq.${photo_id}`, {
-      method: 'PATCH',
-      headers: { ...supabaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
-      body: JSON.stringify({
-        status: 'published',
+    if (auto) {
+      // Phase 1: save the id/url so Phase 2 can find it fast later,
+      // but don't touch status -- stays 'pending' for normal review.
+      await patchPhoto(photo_id, {
         squarespace_product_id: product.id,
-        squarespace_product_url: product.url,
-        published_at: new Date().toISOString()
-      })
-    });
+        squarespace_product_url: product.url
+      });
+      res.status(200).json({ ok: true, held: false, url: product.url });
+      return;
+    }
 
+    // Phase 2 standalone (no prior Phase 1): publish for real now.
+    await patchPhoto(photo_id, {
+      status: 'published',
+      squarespace_product_id: product.id,
+      squarespace_product_url: product.url,
+      published_at: new Date().toISOString()
+    });
     res.status(200).json({ ok: true, url: product.url });
   } catch (err) {
     console.error('publish-product error:', err);
+    if (auto) { res.status(200).json({ ok: true, held: true, reason: err.message }); return; }
     res.status(500).json({ error: err.message });
   }
 };
+
+async function patchPhoto(photoId, fields) {
+  await fetch(`${SUPABASE_URL}/rest/v1/photos?id=eq.${photoId}`, {
+    method: 'PATCH',
+    headers: { ...supabaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+    body: JSON.stringify(fields)
+  });
+}
 
 function supabaseHeaders() {
   return {
@@ -196,10 +253,11 @@ async function duplicateProduct(templateId) {
   return data.id;
 }
 
-// Overwrites the duplicate with this photo's real title, description,
+// Overwrites the product with this photo's real title, description,
 // price, image, and tags; moves it into the correct city/season
-// collection; and makes it visible on the storefront.
-async function updateProduct(productId, { title, description, priceCents, city, season, hashtags, socialUrl, photographerName, storePageId, imageUrl }) {
+// collection; and sets visibility explicitly (false = hidden draft
+// created at upload time, true = live and shown on the storefront).
+async function updateProduct(productId, { title, description, priceCents, city, season, hashtags, socialUrl, photographerName, storePageId, imageUrl, isVisible }) {
   const hashtagList = (hashtags || '').split(',').map(function (t) { return t.trim(); }).filter(Boolean);
   const fullDescription = description
     + '\n\nLocation: ' + city + ' \u2014 ' + season
@@ -212,7 +270,7 @@ async function updateProduct(productId, { title, description, priceCents, city, 
     name: title,
     description: fullDescription,
     tags: [city, season, 'Ketchup Files'].concat(hashtagList),
-    isVisible: true,
+    isVisible: !!isVisible,
     variants: [
       {
         pricing: { basePrice: { currency: 'USD', value: (priceCents / 100).toFixed(2) } },
