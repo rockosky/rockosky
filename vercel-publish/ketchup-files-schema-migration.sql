@@ -1,7 +1,5 @@
 
 
--- ---- photos: per-upload category, rejection reason, and the
--- Squarespace publish trail (product id/url + when it went live) ----
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS category text;
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS rejection_reason text;
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS squarespace_product_id text;
@@ -35,24 +33,10 @@ ALTER TABLE order_deliveries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS exported_to_lsdm boolean DEFAULT false;
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS lsdm_exported_at timestamptz;
 
--- ---- photos: columns the current uploader/dashboard actually read and
--- write that may predate this migration — confirmed via direct code
--- inspection of the live 02/03 files, not assumed. Adding these is what
--- was actually missing if uploads have been silently failing: without
--- media_type/camera_used existing as real columns, that insert() call
--- would error out completely and no row (and therefore no photo, no
--- thumbnail) would ever get saved. ----
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS media_type text;
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS camera_used text;
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS stripe_checkout_url text;
 
--- Every insert from the uploader omits `status` entirely, relying on the
--- column default to land new rows as 'pending'. If that default was
--- never set, new rows land with status = NULL — which the admin
--- dashboard's `.eq('status', 'pending')` filter would never match, so
--- submissions would silently vanish from the review queue while still
--- existing in the table. This makes sure that can't happen regardless
--- of whether it was set before.
 ALTER TABLE photos ALTER COLUMN status SET DEFAULT 'pending';
 
 -- Speeds up the admin dashboard's "pending, oldest first" query and the
@@ -60,19 +44,7 @@ ALTER TABLE photos ALTER COLUMN status SET DEFAULT 'pending';
 CREATE INDEX IF NOT EXISTS idx_photos_status_created_at ON photos (status, created_at);
 CREATE INDEX IF NOT EXISTS idx_photos_exported_to_lsdm ON photos (exported_to_lsdm) WHERE status = 'published';
 
--- ============================================================
--- ADMIN WRITE ACCESS ON photos
--- ============================================================
--- Likely root cause of "Approve/Reject doesn't seem to do anything in
--- the admin dashboard": if the existing UPDATE policy on `photos` only
--- allows a contributor to update their OWN row (auth.uid() = user_id),
--- the admin account trying to approve/reject someone ELSE's upload gets
--- silently blocked by RLS — no error is thrown, the update just quietly
--- affects zero rows, and the pending list reloads looking completely
--- unchanged. This adds an explicit carve-out so the admin account can
--- update any row regardless of who uploaded it. It's additive — any
--- existing owner-based UPDATE policy keeps working for contributors,
--- this just adds a second way a write can be allowed.
+
 DROP POLICY IF EXISTS "kf_admin_update_any_photo" ON photos;
 CREATE POLICY "kf_admin_update_any_photo" ON photos
   FOR UPDATE USING (auth.email() = 'creators@ketchupfiles.com')
@@ -85,11 +57,6 @@ ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS display_name text;
 ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS bio text;
 ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS stripe_account_id text;
 
--- ---- creator_profiles: additional columns used by the Interfaz Studio
--- Marketplace window (avatar + declared work categories there use their
--- own column names, separate from profile_photo_url/bio above — both
--- sets can coexist without conflict since the two tools don't share
--- fields). Skip this block if you've dropped that Marketplace feature. ----
 ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS avatar_url text;
 ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS categories text;
 ALTER TABLE creator_profiles ADD COLUMN IF NOT EXISTS profile_views integer DEFAULT 0;
@@ -117,26 +84,7 @@ DROP POLICY IF EXISTS "profile_comments_insert_authenticated" ON profile_comment
 CREATE POLICY "profile_comments_insert_authenticated" ON profile_comments
   FOR INSERT WITH CHECK (auth.role() = 'authenticated');
 
--- ============================================================
--- STORAGE (bucket: "Ketchup Files UPLOADS")
--- ============================================================
--- This is the other likely cause of "photo doesn't get saved / no
--- thumbnail": storage.objects has row-level security ON by default in
--- Supabase, same as any other table. Without an explicit policy, a
--- contributor's browser can be fully authenticated and still get a
--- silent/blocked upload, or an upload can succeed while the resulting
--- public URL 403s for everyone else (including Squarespace trying to
--- fetch the thumbnail) — because nothing ever granted read/write access
--- on this bucket specifically. These two policies are the minimum the
--- app actually needs:
---   1. Public read — required for photo URLs to work at all as
---      thumbnails/on the live site/as a Squarespace product image.
---   2. Authenticated users can upload only into a folder matching their
---      own user id (path convention already used throughout: every
---      upload path starts with `${user.id}/...`).
--- If these already exist under different names, these CREATE POLICY
--- calls will simply error as duplicates — safe to skip re-running the
--- ones that already exist, or rename/drop the old ones first.
+
 
 DROP POLICY IF EXISTS "kf_uploads_public_read" ON storage.objects;
 CREATE POLICY "kf_uploads_public_read" ON storage.objects
@@ -160,26 +108,7 @@ CREATE POLICY "kf_uploads_own_folder_delete" ON storage.objects
     AND (storage.foldername(name))[1] = auth.uid()::text
   );
 
--- ============================================================
--- STORAGE (bucket: "Ketchup Files ORIGINALS" — PRIVATE)
--- ============================================================
--- REMINDER: these policies only matter once the bucket itself exists.
--- SQL can't create a Storage bucket — that's a one-time manual step in
--- Supabase Dashboard > Storage > New bucket, name it exactly
--- "Ketchup Files ORIGINALS", and leave "Public bucket" UNCHECKED.
---
--- The uploader now also saves a clean, non-watermarked original to this
--- bucket on every upload (see 02-kf-upload-widget.html). It needs an
--- INSERT policy for the same reason the public bucket did — without one,
--- that second upload call fails RLS silently, the original never gets
--- saved, and there's nothing to deliver when someone buys later.
---
--- Deliberately NO public or "authenticated" read policy here — the only
--- thing that should ever read from this bucket is the SUPABASE_SERVICE_
--- ROLE_KEY used server-side in publish-product.js/fulfill-order.js,
--- which bypasses RLS entirely and doesn't need a policy at all. If a
--- read policy ever gets added here by mistake, that defeats the entire
--- point of keeping this bucket private.
+
 DROP POLICY IF EXISTS "kf_originals_own_folder_insert" ON storage.objects;
 CREATE POLICY "kf_originals_own_folder_insert" ON storage.objects
   FOR INSERT WITH CHECK (
@@ -195,15 +124,3 @@ CREATE POLICY "kf_originals_own_folder_delete" ON storage.objects
     AND auth.role() = 'authenticated'
     AND (storage.foldername(name))[1] = auth.uid()::text
   );
-
--- ============================================================
--- NOTE ON RLS FOR photos / creator_profiles (the tables, not storage):
--- This migration only ADDS columns — it does not touch existing RLS
--- policies on `photos` or `creator_profiles`. If those tables already
--- have row-level security enabled (they should, given contributors
--- read/write their own rows), the new columns are covered automatically
--- by whatever row-matching policy already exists — no new policy is
--- needed just because a column was added. Only profile_comments and the
--- storage.objects policies above are genuinely new, which is why they
--- get explicit policies.
--- ============================================================
