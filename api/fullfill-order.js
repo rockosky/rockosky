@@ -1,93 +1,200 @@
-// /api/lsdm-feed.js
+// /api/fulfill-order.js
 //
-// A read-only JSON feed of everything Ketchup Files has published,
-// meant for La Semana de la Moda to pull from — this is the "code ready
-// to export for them" version rather than a live push integration,
-// since building an actual live connection would need access to their
-// backend, which isn't something to guess at.
+// Squarespace calls this URL (as a webhook) when an order comes in.
+// This looks up which photo(s) were purchased, generates a short-lived
+// signed link to the CLEAN original (no watermark — that file lives in
+// a separate PRIVATE bucket the public site never touches), and emails
+// it to the buyer.
 //
-// USAGE
-//   GET /api/lsdm-feed                     -> everything published
-//   GET /api/lsdm-feed?since=2026-08-01    -> only published after that date
-//   GET /api/lsdm-feed?new_only=true       -> only items never marked exported
-// Auth: header  x-lsdm-key: <LSDM_FEED_KEY>
+// ============================================================
+// ONE-TIME SETUP NEEDED (none of this is automatic yet):
 //
-// Each item includes a direct public image/video URL, so their side
-// doesn't need its own Supabase credentials — just this one key.
+// 1. Create a PRIVATE Supabase Storage bucket named exactly
+//    "Ketchup Files ORIGINALS" (public access OFF — this is the whole
+//    point, it should never be reachable except via a signed URL this
+//    endpoint generates). The uploader now writes the clean original
+//    here automatically on every new upload; anything uploaded before
+//    this was added won't have one — those rows will just have a null
+//    original_file_path, and this endpoint will say so instead of
+//    sending a broken link.
+//
+// 2. Set these environment variables in Vercel:
+//      SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM
+//      (whatever real SMTP provider you're using — Gmail, Postmark,
+//      Resend's SMTP mode, etc. This file doesn't assume which one.)
+//    Optionally: SQUARESPACE_WEBHOOK_SECRET, if you want signature
+//    verification (see verifyWebhookSignature below — Squarespace's
+//    exact signing scheme isn't hard-verified here yet since it hasn't
+//    been tested against a real payload; treat that check as best-effort
+//    until confirmed).
+//
+// 3. Register this URL as a webhook subscription in Squarespace,
+//    subscribed to order creation/fulfillment. Squarespace's exact
+//    webhook payload shape is assumed below based on their documented
+//    order object — the first real webhook that comes in should be
+//    checked against what's actually parsed here (this endpoint logs
+//    the full raw payload on every call specifically so that's easy to
+//    verify and adjust if the real shape differs).
+// ============================================================
+
+const nodemailer = require('nodemailer');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const LSDM_FEED_KEY = process.env.LSDM_FEED_KEY; // set this in Vercel env vars, share only with LSDM
-const BUCKET = "Ketchup Files UPLOADS";
+const ORIGINALS_BUCKET = "Ketchup Files ORIGINALS";
+const SIGNED_URL_EXPIRY_SECONDS = 60 * 60 * 72; // 72 hours
 
 module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-lsdm-key');
-
-  if (req.method === 'OPTIONS') {
-    res.status(204).end();
-    return;
-  }
-  if (req.method !== 'GET') {
+  if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
     return;
   }
 
-  if (!LSDM_FEED_KEY || req.headers['x-lsdm-key'] !== LSDM_FEED_KEY) {
-    res.status(401).json({ error: 'Missing or invalid x-lsdm-key header' });
-    return;
-  }
+  // Log the raw payload every time — the fastest way to confirm/adjust
+  // the parsing below once a real order comes through.
+  console.log('Squarespace webhook payload:', JSON.stringify(req.body));
 
   try {
-    let query = `${SUPABASE_URL}/rest/v1/photos?status=eq.published&order=published_at.desc&select=` +
-      encodeURIComponent(
-        'id,title,description,category,subcategory,guest_name,designer_name,season,city,' +
-        'hashtags,social_url,photographer_name,media_type,file_path,price_cents,' +
-        'squarespace_product_url,published_at,exported_to_lsdm'
-      );
-
-    if (req.query.since) {
-      query += `&published_at=gte.${encodeURIComponent(req.query.since)}`;
-    }
-    if (req.query.new_only === 'true') {
-      query += `&exported_to_lsdm=eq.false`;
+    const order = extractOrder(req.body);
+    if (!order) {
+      res.status(200).json({ ok: true, skipped: 'Payload did not look like an order — logged for review' });
+      return;
     }
 
-    const dataRes = await fetch(query, { headers: supabaseHeaders() });
-    if (!dataRes.ok) {
-      const errText = await dataRes.text();
-      throw new Error('Supabase query failed: ' + errText);
+    const buyerEmail = order.customerEmail;
+    const orderId = order.id;
+    if (!buyerEmail || !orderId) {
+      res.status(200).json({ ok: true, skipped: 'Missing customerEmail or order id' });
+      return;
     }
-    const rows = await dataRes.json();
 
-    const items = rows.map((row) => ({
-      id: row.id,
-      title: row.title,
-      description: row.description,
-      category: row.category,
-      subcategory: row.subcategory,
-      guestName: row.guest_name,
-      designerName: row.designer_name,
-      season: row.season,
-      city: row.city,
-      hashtags: (row.hashtags || '').split(',').map((t) => t.trim()).filter(Boolean),
-      socialUrl: row.social_url,
-      photographerCredit: row.photographer_name,
-      mediaType: row.media_type,
-      mediaUrl: `${SUPABASE_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${row.file_path}`,
-      priceUsd: row.price_cents != null ? row.price_cents / 100 : null,
-      buyUrl: row.squarespace_product_url || null,
-      publishedAt: row.published_at,
-      alreadyExported: !!row.exported_to_lsdm
-    }));
+    // Avoid double-sending if Squarespace retries the same webhook.
+    const already = await fetch(
+      `${SUPABASE_URL}/rest/v1/order_deliveries?squarespace_order_id=eq.${encodeURIComponent(orderId)}&select=id`,
+      { headers: supabaseHeaders() }
+    ).then(r => r.json());
+    if (already && already.length) {
+      res.status(200).json({ ok: true, skipped: 'Already delivered for this order' });
+      return;
+    }
 
-    res.status(200).json({ count: items.length, items });
+    const productIds = (order.lineItems || []).map(li => li.productId).filter(Boolean);
+    if (!productIds.length) {
+      res.status(200).json({ ok: true, skipped: 'No line items with a productId found' });
+      return;
+    }
+
+    const orFilter = productIds.map(id => `squarespace_product_id.eq.${id}`).join(',');
+    const photosRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/photos?or=(${orFilter})&select=id,title,original_file_path,squarespace_product_id`,
+      { headers: supabaseHeaders() }
+    );
+    const photos = await photosRes.json();
+
+    if (!photos || !photos.length) {
+      res.status(200).json({ ok: true, skipped: 'No matching photos found for purchased product IDs' });
+      return;
+    }
+
+    const links = [];
+    const missing = [];
+    for (const photo of photos) {
+      if (!photo.original_file_path) {
+        missing.push(photo.title || photo.id);
+        continue;
+      }
+      const signedUrl = await createSignedUrl(photo.original_file_path);
+      if (signedUrl) links.push({ title: photo.title || 'Your photo', url: signedUrl });
+      else missing.push(photo.title || photo.id);
+    }
+
+    if (links.length) {
+      await sendDeliveryEmail(buyerEmail, links, missing);
+    }
+
+    // Record what happened either way, so missing-original cases are
+    // visible somewhere instead of just silently not sending anything.
+    await fetch(`${SUPABASE_URL}/rest/v1/order_deliveries`, {
+      method: 'POST',
+      headers: { ...supabaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      body: JSON.stringify({
+        squarespace_order_id: orderId,
+        customer_email: buyerEmail,
+        photo_ids: photos.map(p => p.id),
+        delivered_count: links.length,
+        missing_originals: missing.length ? missing : null,
+        delivered_at: new Date().toISOString()
+      })
+    });
+
+    res.status(200).json({ ok: true, delivered: links.length, missingOriginals: missing });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
   }
 };
+
+// ---- Best-effort extraction of order id / buyer email / line items.
+// Squarespace's real webhook payload shape should be checked against
+// the logged raw payload (see console.log above) the first time a real
+// order comes through, and this adjusted if it doesn't match. ----
+function extractOrder(body) {
+  const order = body && (body.data || body.order || body);
+  if (!order || (!order.id && !order.orderId)) return null;
+  return {
+    id: order.id || order.orderId,
+    customerEmail: order.customerEmail || (order.billingAddress && order.billingAddress.email) || order.email,
+    lineItems: (order.lineItems || order.line_items || []).map(li => ({
+      productId: li.productId || li.product_id || (li.variantOptions && li.variantOptions.productId)
+    }))
+  };
+}
+
+async function createSignedUrl(path) {
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/storage/v1/object/sign/${encodeURIComponent(ORIGINALS_BUCKET)}/${path}`,
+      {
+        method: 'POST',
+        headers: { ...supabaseHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expiresIn: SIGNED_URL_EXPIRY_SECONDS })
+      }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.signedURL ? `${SUPABASE_URL}/storage/v1${data.signedURL}` : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function sendDeliveryEmail(toEmail, links, missing) {
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT || 587),
+    secure: Number(process.env.SMTP_PORT) === 465,
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+  });
+
+  const linksHtml = links.map(l => `<p><strong>${l.title}</strong><br><a href="${l.url}">Download full-resolution file</a></p>`).join('');
+  const missingHtml = missing.length
+    ? `<p style="color:#999;">Note: ${missing.length} item(s) from this order aren't ready for delivery yet — Ketchup Files will follow up separately.</p>`
+    : '';
+
+  await transporter.sendMail({
+    from: process.env.SMTP_FROM,
+    to: toEmail,
+    subject: 'Your Ketchup Files photo is ready to download',
+    html: `
+      <div style="font-family: Arial, sans-serif;">
+        <p>Thanks for your purchase from Ketchup Files.</p>
+        ${linksHtml}
+        ${missingHtml}
+        <p style="color:#999; font-size:12px;">Download link${links.length > 1 ? 's expire' : ' expires'} in 72 hours.</p>
+      </div>
+    `
+  });
+}
 
 function supabaseHeaders() {
   return {
