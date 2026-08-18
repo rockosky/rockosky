@@ -1,10 +1,4 @@
--- ============================================================
--- KETCHUP FILES — community chat
--- ============================================================
--- One shared room where any logged-in contributor/creator can talk to
--- each other, live. Uses the display name (never email) already
--- established across the rest of the app.
--- ============================================================
+
 
 CREATE TABLE IF NOT EXISTS community_messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
