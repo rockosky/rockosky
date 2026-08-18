@@ -74,7 +74,7 @@ module.exports = async (req, res) => {
   }
 };
 
-function supabaseHeaders() {
+function supbaseHeaders() {
   return {
     apikey: SUPBASE_SERVICE_ROLE_KEY,
     Authorization: `Bearer ${SUPBASE_SERVICE_ROLE_KEY}`
