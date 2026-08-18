@@ -29,7 +29,7 @@ module.exports = async (req, res) => {
     // 1. Load the photo row (service role bypasses RLS)
     const photoRes = await fetch(
       `${SUPBASE_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
-      { headers: supabaseHeaders() }
+      { headers: supbaseHeaders() }
     );
     const photos = await photoRes.json();
     const photo = photos && photos[0];
@@ -55,10 +55,10 @@ module.exports = async (req, res) => {
       imageUrl
     });
 
-    // 3. Write the result back to Supabase
+    // 3. Write the result back to supbase
     await fetch(`${SUPBASE_URL}/rest/v1/photos?id=eq.${photo_id}`, {
       method: 'PATCH',
-      headers: { ...supabaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
       body: JSON.stringify({
         status: 'published',
         squarespace_product_id: product.id,
@@ -74,7 +74,7 @@ module.exports = async (req, res) => {
   }
 };
 
-function supabaseHeaders() {
+function supbaseHeaders() {
   return {
     apikey: SUPBASE_SERVICE_ROLE_KEY,
     Authorization: `Bearer ${SUPBASE_SERVICE_ROLE_KEY}`
