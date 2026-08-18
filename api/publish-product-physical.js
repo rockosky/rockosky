@@ -1,22 +1,4 @@
-// /api/publish-product-physical.js
-//
-// Alternate publish path using a PHYSICAL product instead of DIGITAL.
-// Squarespace's confirmed 405-on-create limit is specifically for
-// type: 'DIGITAL' -- physical products go through the standard
-// inventory/shipping pipeline, not the digital-fulfillment one, so a
-// plain POST create is expected to work with no template-duplication
-// workaround needed. This has NOT been confirmed against a live call
-// yet either -- test this alongside publish-product.js and see which
-// one actually succeeds against your real store.
-//
-// NOTE: a physical product implies Squarespace will want shipping/
-// inventory fields (weight, quantity, etc). Since what's actually
-// being sold is a digital download, this sets inventory to
-// "unlimited" and zero weight/shipping -- the physical wrapper is
-// just to route around the DIGITAL-create restriction, not to
-// actually ship anything. If Squarespace still requires real shipping
-// config despite these zeroed values, that would be the next thing to
-// adjust once tested live.
+
 
 const SUPBASE_URL = process.env.SUPBASE_URL;
 const SUPBASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY;
