@@ -1,4 +1,19 @@
-
+// /api/lsdm-feed.js
+//
+// A read-only JSON feed of everything Ketchup Files has published,
+// meant for La Semana de la Moda to pull from — this is the "code ready
+// to export for them" version rather than a live push integration,
+// since building an actual live connection would need access to their
+// backend, which isn't something to guess at.
+//
+// USAGE
+//   GET /api/lsdm-feed                     -> everything published
+//   GET /api/lsdm-feed?since=2026-08-01    -> only published after that date
+//   GET /api/lsdm-feed?new_only=true       -> only items never marked exported
+// Auth: header  x-lsdm-key: <LSDM_FEED_KEY>
+//
+// Each item includes a direct public image/video URL, so their side
+// doesn't need its own Supabase credentials — just this one key.
 
 const SUPBASE_URL = process.env.SUPBASE_URL;
 const SUPBASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY;
@@ -39,10 +54,10 @@ module.exports = async (req, res) => {
       query += `&exported_to_lsdm=eq.false`;
     }
 
-    const dataRes = await fetch(query, { headers: supbaseHeaders() });
+    const dataRes = await fetch(query, { headers: supabaseHeaders() });
     if (!dataRes.ok) {
       const errText = await dataRes.text();
-      throw new Error('Supbase query failed: ' + errText);
+      throw new Error('Supabase query failed: ' + errText);
     }
     const rows = await dataRes.json();
 
@@ -74,9 +89,9 @@ module.exports = async (req, res) => {
   }
 };
 
-function supbaseHeaders() {
+function supabaseHeaders() {
   return {
     apikey: SUPBASE_SERVICE_ROLE_KEY,
     Authorization: `Bearer ${SUPBASE_SERVICE_ROLE_KEY}`
   };
-}
+}c
