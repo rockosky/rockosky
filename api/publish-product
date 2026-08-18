@@ -10,7 +10,7 @@ module.exports = async (req, res) => {
   // ---- CORS: without this, the browser blocks the response before
   // the Admin dashboard ever sees it -- shows up client-side as a
   // generic "Failed to fetch" with no useful detail, even though the
-  // Squarespace/Supabase calls underneath may have partially run.
+  // Squarespace/Supbase calls underneath may have partially run.
   // This was confirmed missing from the previous version. ----
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
