@@ -4,13 +4,13 @@ Go through this top to bottom, in order. Each section only matters if the one ab
 
 ---
 
-## 1. SUPABASE (database + storage)
+## 1. supbase (database + storage)
 
-- [ ] Go to Supabase → SQL Editor → run `ketchup-files-schema-migration.sql` (the whole file, safe to re-run).
+- [ ] Go to supbase → SQL Editor → run `ketchup-files-schema-migration.sql` (the whole file, safe to re-run).
 - [ ] Go to Table Editor → `photos` table → confirm columns exist: `category`, `subcategory`, `guest_name`, `designer_name`, `original_file_path`, `squarespace_product_id`, `squarespace_product_url`, `published_at`.
 - [ ] Go to Storage → confirm bucket `Ketchup Files UPLOADS` exists (public).
 - [ ] Go to Storage → confirm bucket `Ketchup Files ORIGINALS` exists (**private** — public toggle OFF). If it doesn't exist yet, create it now.
-- [ ] Go to Settings → API → confirm you have `SUPABASE_URL` and the `service_role` (secret) key handy — you'll need both in step 3.
+- [ ] Go to Settings → API → confirm you have `supbase_URL` and the `service_role` (secret) key handy — you'll need both in step 3.
 
 ## 2. GITHUB (the code itself)
 
@@ -25,7 +25,7 @@ Go through this top to bottom, in order. Each section only matters if the one ab
 ## 3. VERCEL (this is the part that's been going wrong)
 
 - [ ] **Click the project switcher (top-left on vercel.com) and confirm it says `vercel-publish` — not `rockosky`, not `uploads`.** This has been the #1 source of confusion — you have three separate projects.
-- [ ] Inside `vercel-publish` → Settings → Environment Variables → confirm these three exist: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SQUARESPACE_API_KEY`.
+- [ ] Inside `vercel-publish` → Settings → Environment Variables → confirm these three exist: `supbase_URL`, `supbase_SERVICE_ROLE_KEY`, `SQUARESPACE_API_KEY`.
 - [ ] Inside `vercel-publish` → Settings → Domains → confirm `vercel-publish-fawn.vercel.app` is listed with "Valid Configuration."
 - [ ] Inside `vercel-publish` → Deployments → confirm the TOP entry says "Ready" (green), and its commit message/timestamp matches your latest GitHub change.
 - [ ] If the top deployment is old or doesn't match your latest commit: click the three dots on it → Redeploy → uncheck "Use existing Build Cache."
