@@ -1,44 +1,7 @@
-// /api/publish-digital-product.js
-//
-// TWO-PHASE flow, matching what the upload widget already expects:
-//
-// PHASE 1 -- auto-create (called automatically by the upload widget
-// right after every submission, body: { photo_id, auto: true }):
-// finds the hidden Squarespace DIGITAL product template (confirmed:
-// lives in the "street-style-contributors" collection, slug/tag
-// "kf-template-unused"), duplicates it, moves the duplicate into the
-// correct city/season collection, fills in the real content -- but
-// creates it HIDDEN (isVisible: false). Saves squarespace_product_id/
-// url back to the photo row immediately. Does NOT touch photo status
-// -- the photo stays 'pending' for normal admin review either way.
-// If anything isn't ready (no template, Squarespace error, etc), this
-// responds { ok: true, held: true } rather than an error -- non-fatal,
-// contributor never sees a scary message, admin review still covers
-// it normally, and Phase 2 will just do the full creation itself later.
-//
-// PHASE 2 -- finalize & reveal (called when you click Approve &
-// Publish, body: { photo_id }, no auto flag): if Phase 1 already
-// created the hidden product, this just flips isVisible: true and
-// refreshes the content in case anything changed since upload --
-// fast, since the heavy lifting already happened. If Phase 1 never
-// ran or was held, this does the full creation right now instead.
-// Either way, ends with photo status -> 'published'.
-//
-// WHY DUPLICATE INSTEAD OF CREATE: Squarespace's Commerce API returns
-// a 405 if you try to POST a brand-new DIGITAL-type product directly
-// -- confirmed. The workaround: keep one hidden/unused DIGITAL product
-// as a template (never shown on the storefront) and duplicate IT
-// instead -- duplication is a different, less-restricted operation.
-//
-// NOTE: the exact duplicate-product endpoint/response shape below
-// follows Squarespace's documented Commerce Advanced API as of early
-// 2026 but has NOT been confirmed against a live call yet -- every
-// Squarespace response is logged raw specifically so the first real
-// run can be checked against what's actually returned, and this
-// adjusted if the real shape differs.
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+const SUPBASE_URL = process.env.SUPBASE_URL;
+const SUPBASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY;
 const SQUARESPACE_API_KEY = process.env.SQUARESPACE_API_KEY;
 const TEMPLATE_TAG = 'kf-template-unused';
 const BUCKET = "Ketchup Files UPLOADS";
@@ -47,7 +10,7 @@ module.exports = async (req, res) => {
   // ---- CORS: without this, the browser blocks the response before
   // the Admin dashboard ever sees it -- shows up client-side as a
   // generic "Failed to fetch" with no useful detail, even though the
-  // Squarespace/Supabase calls underneath may have partially run.
+  // Squarespace/Supbase calls underneath may have partially run.
   // This was confirmed missing from the previous version. ----
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -71,8 +34,8 @@ module.exports = async (req, res) => {
   try {
     // 1. Load the photo row (service role key bypasses RLS)
     const photoRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
-      { headers: supabaseHeaders() }
+      `${SUPBASE_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
+      { headers: supbaseHeaders() }
     );
     const photos = await photoRes.json();
     const photo = photos && photos[0];
@@ -82,7 +45,7 @@ module.exports = async (req, res) => {
       throw new Error('Photo is missing title, city, season, or price -- fill these in before publishing');
     }
 
-    const imageUrl = `${SUPABASE_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
+    const imageUrl = `${SUPBASE_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
     const collectionName = `${photo.city} Fashion Week ${photo.season}`;
 
     // ---- PHASE 2 fast path: Phase 1 already created this product
@@ -173,17 +136,17 @@ module.exports = async (req, res) => {
 };
 
 async function patchPhoto(photoId, fields) {
-  await fetch(`${SUPABASE_URL}/rest/v1/photos?id=eq.${photoId}`, {
+  await fetch(`${SUPBASE_URL}/rest/v1/photos?id=eq.${photoId}`, {
     method: 'PATCH',
-    headers: { ...supabaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+    headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
     body: JSON.stringify(fields)
   });
 }
 
-function supabaseHeaders() {
+function supbaseHeaders() {
   return {
-    apikey: SUPABASE_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+    apikey: SUPBASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${SUPBASE_SERVICE_ROLE_KEY}`
   };
 }
 
@@ -259,7 +222,7 @@ async function duplicateProduct(templateId) {
 // price, image, and tags; moves it into the correct city/season
 // collection; and sets visibility explicitly (false = hidden draft
 // created at upload time, true = live and shown on the storefront).
-// SKU and a hidden HTML comment both encode the Supabase photo_id, so
+// SKU and a hidden HTML comment both encode the Supbase photo_id, so
 // any live product can be traced straight back to its source row --
 // SKU is visible in the Squarespace admin, the comment is invisible on
 // the storefront but present in the raw description/API data.
