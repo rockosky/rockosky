@@ -1,6 +1,4 @@
-<!-- =========================================================
-     KETCHUP FILES — INTERFAZ STUDIO v2
-     ========================================================= -->
+
 <style>
   #header, .header, #footer, .footer,
   .sqs-announcement-bar-dropzone, .header-announcement-bar-wrapper
@@ -8468,15 +8466,7 @@ SOC=Social Use Only</textarea>
     }
   });
 
-  // ---- Session relay for srcdoc-embedded sub-apps (Uploader, Admin,
-  // Marketplace). A `srcdoc` iframe gets a fresh, effectively throwaway
-  // storage context nearly every time it (re)loads, so a Supabase login
-  // session saved to that iframe's own localStorage can vanish even
-  // though nothing actually signed the person out. This page itself has
-  // a real, stable origin, so it acts as the persistent store instead:
-  // each sub-app posts its session up here on login, and asks for it
-  // back on load. Keyed per source window so Uploader/Admin/Marketplace
-  // sessions never collide with each other. ----
+
   window.addEventListener('message', (e)=>{
     const msg = e.data;
     if(!msg || !msg.type) return;
