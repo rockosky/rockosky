@@ -55,13 +55,12 @@ module.exports = async (req, res) => {
     }
 
     const imageUrl = `${SUPBASE_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
-    const collectionName = `${photo.city} Fashion Week ${photo.season}`;
 
     // ---- PHASE 2 fast path: Phase 1 already created this product
     // (hidden). Just flip it visible and refresh content -- no need
     // to find the template or duplicate again. ----
     if (photo.squarespace_product_id && !auto) {
-      const storePageId = await getOrCreateStorePage(collectionName);
+      const storePageId = await getOrCreateStorePage(photo.city);
       const product = await updateProduct(photo.squarespace_product_id, {
         photoId: photo.id,
         title: photo.title,
@@ -96,7 +95,7 @@ module.exports = async (req, res) => {
     // (hidden) or Phase 2 running standalone (visible immediately,
     // since Phase 1 either never ran or was held). No search needed
     // anymore -- TEMPLATE_PRODUCT_ID is the confirmed real ID. ----
-    const storePageId = await getOrCreateStorePage(collectionName);
+    const storePageId = await getOrCreateStorePage(photo.city);
     const newProductId = await duplicateProduct(TEMPLATE_PRODUCT_ID);
     const product = await updateProduct(newProductId, {
       photoId: photo.id,
@@ -161,12 +160,18 @@ function squarespaceHeaders() {
   };
 }
 
-// Looks up an existing collection/store page matching the city+season
-// name, or creates one if it doesn't exist yet. Confirmed this is a
-// separate collection from where the hidden template product itself
-// lives -- published products get moved OUT of the template's
-// collection and into their real city/season one.
-async function getOrCreateStorePage(collectionName) {
+// Finds an existing collection/store page for this photo's city.
+// FIXED: this used to try creating a new store page if no exact match
+// was found -- confirmed live that Squarespace's API flatly returns
+// 405 Method Not Allowed for POST on this endpoint, so creation is
+// simply not possible via the API, only reading existing ones. Also
+// fixed the match itself: it was looking for an exact string like
+// "New York Fashion Week SS27", but your real collections are named
+// things like "NEW YORK FASHION WEEK STREET STYLE 2026" -- no season
+// in the name, city + year instead. Now matches on the city name being
+// contained anywhere in the title (case-insensitive), which works with
+// your actual naming convention.
+async function getOrCreateStorePage(city) {
   const listRes = await fetch('https://api.squarespace.com/1.0/commerce/store_pages', {
     headers: squarespaceHeaders()
   });
@@ -174,21 +179,22 @@ async function getOrCreateStorePage(collectionName) {
   console.log('getOrCreateStorePage list raw response:', listText);
   if (!listRes.ok) throw new Error(`Squarespace store page lookup failed: ${listText}`);
   const list = JSON.parse(listText);
-  const existing = (list.storePages || []).find(
-    p => p.name && p.name.toLowerCase() === collectionName.toLowerCase()
-  );
-  if (existing) return existing.id;
+  const cityLower = city.toLowerCase();
 
-  const createRes = await fetch('https://api.squarespace.com/1.0/commerce/store_pages', {
-    method: 'POST',
-    headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: collectionName })
-  });
-  const createText = await createRes.text();
-  console.log('getOrCreateStorePage create raw response:', createText);
-  if (!createRes.ok) throw new Error(`Squarespace store page create failed: ${createText}`);
-  const created = JSON.parse(createText);
-  return created.id;
+  // Prefer an enabled collection whose title contains the city name.
+  const match = (list.storePages || []).find(
+    p => p.isEnabled && p.title && p.title.toLowerCase().includes(cityLower)
+  );
+  if (match) return match.id;
+
+  // Fall back to any match at all (even disabled) rather than failing
+  // outright, in case the right collection is temporarily disabled.
+  const anyMatch = (list.storePages || []).find(
+    p => p.title && p.title.toLowerCase().includes(cityLower)
+  );
+  if (anyMatch) return anyMatch.id;
+
+  throw new Error(`No Squarespace collection found matching city "${city}" -- collections can't be created via the API, so create one manually in Squarespace first (e.g. "${city.toUpperCase()} FASHION WEEK 2026")`);
 }
 
 // Duplicates the template product. This is the step that avoids the
