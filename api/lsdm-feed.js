@@ -39,7 +39,7 @@ module.exports = async (req, res) => {
       query += `&exported_to_lsdm=eq.false`;
     }
 
-    const dataRes = await fetch(query, { headers: supabaseHeaders() });
+    const dataRes = await fetch(query, { headers: supbaseHeaders() });
     if (!dataRes.ok) {
       const errText = await dataRes.text();
       throw new Error('Supabase query failed: ' + errText);
