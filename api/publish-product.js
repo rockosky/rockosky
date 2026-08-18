@@ -91,6 +91,7 @@ module.exports = async (req, res) => {
     if (photo.squarespace_product_id && !auto) {
       const storePageId = await getOrCreateStorePage(collectionName);
       const product = await updateProduct(photo.squarespace_product_id, {
+        photoId: photo.id,
         title: photo.title,
         description: photo.description || '',
         priceCents: photo.price_cents,
@@ -131,6 +132,7 @@ module.exports = async (req, res) => {
     const storePageId = await getOrCreateStorePage(collectionName);
     const newProductId = await duplicateProduct(templateId);
     const product = await updateProduct(newProductId, {
+      photoId: photo.id,
       title: photo.title,
       description: photo.description || '',
       priceCents: photo.price_cents,
@@ -257,13 +259,18 @@ async function duplicateProduct(templateId) {
 // price, image, and tags; moves it into the correct city/season
 // collection; and sets visibility explicitly (false = hidden draft
 // created at upload time, true = live and shown on the storefront).
-async function updateProduct(productId, { title, description, priceCents, city, season, hashtags, socialUrl, photographerName, storePageId, imageUrl, isVisible }) {
+// SKU and a hidden HTML comment both encode the Supabase photo_id, so
+// any live product can be traced straight back to its source row --
+// SKU is visible in the Squarespace admin, the comment is invisible on
+// the storefront but present in the raw description/API data.
+async function updateProduct(productId, { photoId, title, description, priceCents, city, season, hashtags, socialUrl, photographerName, storePageId, imageUrl, isVisible }) {
   const hashtagList = (hashtags || '').split(',').map(function (t) { return t.trim(); }).filter(Boolean);
   const fullDescription = description
     + '\n\nLocation: ' + city + ' \u2014 ' + season
     + (photographerName ? '\n\nPhoto by ' + photographerName : '')
     + (hashtagList.length ? '\n\n' + hashtagList.map(function (t) { return '#' + t.replace(/^#/, ''); }).join(' ') : '')
-    + (socialUrl ? '\n\nProfile / Link: ' + socialUrl : '');
+    + (socialUrl ? '\n\nProfile / Link: ' + socialUrl : '')
+    + '\n\n<!-- kf-photo-id: ' + photoId + ' -->';
 
   const body = {
     storePageId: storePageId,
@@ -274,7 +281,7 @@ async function updateProduct(productId, { title, description, priceCents, city, 
     variants: [
       {
         pricing: { basePrice: { currency: 'USD', value: (priceCents / 100).toFixed(2) } },
-        sku: 'KF-' + productId
+        sku: 'KF-' + photoId
       }
     ],
     images: [{ url: imageUrl }]
