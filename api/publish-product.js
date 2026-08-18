@@ -35,7 +35,7 @@ module.exports = async (req, res) => {
     // 1. Load the photo row (service role key bypasses RLS)
     const photoRes = await fetch(
       `${SUPBASE_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
-      { headers: supabaseHeaders() }
+      { headers: supbaseHeaders() }
     );
     const photos = await photoRes.json();
     const photo = photos && photos[0];
@@ -138,12 +138,12 @@ module.exports = async (req, res) => {
 async function patchPhoto(photoId, fields) {
   await fetch(`${SUPBASE_URL}/rest/v1/photos?id=eq.${photoId}`, {
     method: 'PATCH',
-    headers: { ...supabaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+    headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
     body: JSON.stringify(fields)
   });
 }
 
-function supabaseHeaders() {
+function supbaseHeaders() {
   return {
     apikey: SUPBASE_SERVICE_ROLE_KEY,
     Authorization: `Bearer ${SUPBASE_SERVICE_ROLE_KEY}`
@@ -222,7 +222,7 @@ async function duplicateProduct(templateId) {
 // price, image, and tags; moves it into the correct city/season
 // collection; and sets visibility explicitly (false = hidden draft
 // created at upload time, true = live and shown on the storefront).
-// SKU and a hidden HTML comment both encode the Supabase photo_id, so
+// SKU and a hidden HTML comment both encode the supbase photo_id, so
 // any live product can be traced straight back to its source row --
 // SKU is visible in the Squarespace admin, the comment is invisible on
 // the storefront but present in the raw description/API data.
