@@ -179,28 +179,36 @@ async function getOrCreateStorePage(city, season) {
   console.log('getOrCreateStorePage list raw response:', listText);
   if (!listRes.ok) throw new Error(`Squarespace store page lookup failed: ${listText}`);
   const list = JSON.parse(listText);
-  const cityLower = city.toLowerCase();
-  const seasonLower = (season || '').toLowerCase();
 
-  // Best: enabled collection with both city AND season in the title.
-  if (seasonLower) {
-    const exact = (list.storePages || []).find(
-      p => p.isEnabled && p.title
-        && p.title.toLowerCase().includes(cityLower)
-        && p.title.toLowerCase().includes(seasonLower)
-    );
+  // Normalize hyphens/underscores to spaces and collapse whitespace
+  // before comparing, so matching works whether a collection's title
+  // uses spaces ("New York Fashion Week") or hyphens/slug-style
+  // formatting ("new-york-fashion-week") -- confirmed titles and URL
+  // slugs aren't always styled the same way in this store.
+  function normalize(s) {
+    return (s || '').toLowerCase().replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+  const cityNorm = normalize(city);
+  const seasonNorm = normalize(season);
+
+  // Best: enabled collection with both city AND season.
+  if (seasonNorm) {
+    const exact = (list.storePages || []).find(p => {
+      const t = normalize(p.title);
+      return p.isEnabled && t.includes(cityNorm) && t.includes(seasonNorm);
+    });
     if (exact) return exact.id;
   }
 
   // Next best: enabled collection matching just the city.
   const cityMatch = (list.storePages || []).find(
-    p => p.isEnabled && p.title && p.title.toLowerCase().includes(cityLower)
+    p => p.isEnabled && normalize(p.title).includes(cityNorm)
   );
   if (cityMatch) return cityMatch.id;
 
   // Last resort: any match at all, even disabled.
   const anyMatch = (list.storePages || []).find(
-    p => p.title && p.title.toLowerCase().includes(cityLower)
+    p => normalize(p.title).includes(cityNorm)
   );
   if (anyMatch) return anyMatch.id;
 
@@ -213,7 +221,7 @@ async function getOrCreateStorePage(city, season) {
 async function duplicateProduct(templateId) {
   const dupRes = await fetch(
     `https://api.squarespace.com/1.0/commerce/products/${templateId}/duplicate`,
-    { method: 'POST', headers: squarespaceHeaders() }
+    { method: 'POST', headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' } }
   );
   const text = await dupRes.text();
   console.log('duplicateProduct raw response:', text);
