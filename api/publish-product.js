@@ -2704,7 +2704,7 @@ SOC=Social Use Only</textarea>
       </svg>
     </div>
   </div>
-  <!-- ===================== KETCHUP FILES UPLOAD -- contributor gallery/upload/portfolio widget (Supabase-backed) ===================== -->
+  <!-- ===================== KETCHUP FILES UPLOAD -- contributor gallery/upload/portfolio widget (SUPBASE-backed) ===================== -->
   <div class="win" id="uploadWidgetWin">
     <div class="titlebar" data-drag-target="uploadWidgetWin">
       <span>Ketchup Files Upload</span>
@@ -2720,7 +2720,7 @@ SOC=Social Use Only</textarea>
       </svg>
     </div>
   </div>
-  <!-- ===================== KETCHUP FILES ADMIN REVIEW -- approve/reject/publish pending uploads (Supabase-backed) ===================== -->
+  <!-- ===================== KETCHUP FILES ADMIN REVIEW -- approve/reject/publish pending uploads (SUPBASE-backed) ===================== -->
   <div class="win" id="adminReviewWin">
     <div class="titlebar" data-drag-target="adminReviewWin">
       <span>Ketchup Files Admin Review</span>
