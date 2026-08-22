@@ -1,41 +1,4 @@
-// /api/fulfill-order.js
-//
-// Squarespace calls this URL (as a webhook) when an order comes in.
-// This looks up which photo(s) were purchased, generates a short-lived
-// signed link to the CLEAN original (no watermark — that file lives in
-// a separate PRIVATE bucket the public site never touches), and emails
-// it to the buyer.
-//
-// ============================================================
-// ONE-TIME SETUP NEEDED (none of this is automatic yet):
-//
-// 1. Create a PRIVATE supbase Storage bucket named exactly
-//    "Ketchup Files ORIGINALS" (public access OFF — this is the whole
-//    point, it should never be reachable except via a signed URL this
-//    endpoint generates). The uploader now writes the clean original
-//    here automatically on every new upload; anything uploaded before
-//    this was added won't have one — those rows will just have a null
-//    original_file_path, and this endpoint will say so instead of
-//    sending a broken link.
-//
-// 2. Set these environment variables in Vercel:
-//      SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM
-//      (whatever real SMTP provider you're using — Gmail, Postmark,
-//      Resend's SMTP mode, etc. This file doesn't assume which one.)
-//    Optionally: SQUARESPACE_WEBHOOK_SECRET, if you want signature
-//    verification (see verifyWebhookSignature below — Squarespace's
-//    exact signing scheme isn't hard-verified here yet since it hasn't
-//    been tested against a real payload; treat that check as best-effort
-//    until confirmed).
-//
-// 3. Register this URL as a webhook subscription in Squarespace,
-//    subscribed to order creation/fulfillment. Squarespace's exact
-//    webhook payload shape is assumed below based on their documented
-//    order object — the first real webhook that comes in should be
-//    checked against what's actually parsed here (this endpoint logs
-//    the full raw payload on every call specifically so that's easy to
-//    verify and adjust if the real shape differs).
-// ============================================================
+
 
 const nodemailer = require('nodemailer');
 
@@ -43,8 +6,8 @@ const nodemailer = require('nodemailer');
 // SUPBASE_URL / SUPBASE_SERVICE_ROLE_KEY (no "A") -- reading both
 // spellings here so this works regardless, and matches the fix
 // already applied to publish-product.js.
-const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
-const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
+const SUPBASE_URL = process.env.SUPBASE_URL || process.env.SUPBASE_URL;
+const SUPBASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.SUPBASE_SERVICE_ROLE_KEY;
 const ORIGINALS_BUCKET = "Ketchup Files ORIGINALS";
 const SIGNED_URL_EXPIRY_SECONDS = 60 * 60 * 72; // 72 hours
 
@@ -55,8 +18,8 @@ module.exports = async (req, res) => {
   }
 
   const missingEnvVars = [];
-  if (!supbase_URL) missingEnvVars.push('SUPBASE_URL');
-  if (!supbase_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
+  if (!SUPBASE_URL) missingEnvVars.push('SUPBASE_URL');
+  if (!SUPBASE_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
   if (!process.env.SMTP_HOST) missingEnvVars.push('SMTP_HOST');
   if (!process.env.SMTP_USER) missingEnvVars.push('SMTP_USER');
   if (!process.env.SMTP_PASS) missingEnvVars.push('SMTP_PASS');
@@ -86,8 +49,8 @@ module.exports = async (req, res) => {
 
     // Avoid double-sending if Squarespace retries the same webhook.
     const already = await fetch(
-      `${supbase_URL}/rest/v1/order_deliveries?squarespace_order_id=eq.${encodeURIComponent(orderId)}&select=id`,
-      { headers: supbaseHeaders() }
+      `${SUPBASE_URL}/rest/v1/order_deliveries?squarespace_order_id=eq.${encodeURIComponent(orderId)}&select=id`,
+      { headers: SUPBASEHeaders() }
     ).then(r => r.json());
     if (already && already.length) {
       res.status(200).json({ ok: true, skipped: 'Already delivered for this order' });
@@ -102,8 +65,8 @@ module.exports = async (req, res) => {
 
     const orFilter = productIds.map(id => `squarespace_product_id.eq.${id}`).join(',');
     const photosRes = await fetch(
-      `${supbase_URL}/rest/v1/photos?or=(${orFilter})&select=id,title,original_file_path,squarespace_product_id`,
-      { headers: supbaseHeaders() }
+      `${SUPBASE_URL}/rest/v1/photos?or=(${orFilter})&select=id,title,original_file_path,squarespace_product_id`,
+      { headers: SUPBASEHeaders() }
     );
     const photos = await photosRes.json();
 
@@ -130,9 +93,9 @@ module.exports = async (req, res) => {
 
     // Record what happened either way, so missing-original cases are
     // visible somewhere instead of just silently not sending anything.
-    await fetch(`${supbase_URL}/rest/v1/order_deliveries`, {
+    await fetch(`${SUPBASE_URL}/rest/v1/order_deliveries`, {
       method: 'POST',
-      headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      headers: { ...SUPBASEHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
       body: JSON.stringify({
         squarespace_order_id: orderId,
         customer_email: buyerEmail,
@@ -169,16 +132,16 @@ function extractOrder(body) {
 async function createSignedUrl(path) {
   try {
     const res = await fetch(
-      `${supbase_URL}/storage/v1/object/sign/${encodeURIComponent(ORIGINALS_BUCKET)}/${path}`,
+      `${SUPBASE_URL}/storage/v1/object/sign/${encodeURIComponent(ORIGINALS_BUCKET)}/${path}`,
       {
         method: 'POST',
-        headers: { ...supbaseHeaders(), 'Content-Type': 'application/json' },
+        headers: { ...SUPBASEHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ expiresIn: SIGNED_URL_EXPIRY_SECONDS })
       }
     );
     if (!res.ok) return null;
     const data = await res.json();
-    return data.signedURL ? `${supbase_URL}/storage/v1${data.signedURL}` : null;
+    return data.signedURL ? `${SUPBASE_URL}/storage/v1${data.signedURL}` : null;
   } catch (e) {
     return null;
   }
@@ -212,9 +175,9 @@ async function sendDeliveryEmail(toEmail, links, missing) {
   });
 }
 
-function supbaseHeaders() {
+function SUPBASEHeaders() {
   return {
-    apikey: supbase_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${supbase_SERVICE_ROLE_KEY}`
+    apikey: SUPBASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${SUPBASE_SERVICE_ROLE_KEY}`
   };
 }
