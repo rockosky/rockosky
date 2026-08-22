@@ -1,6 +1,23 @@
+// /api/publish-product.js
+//
+// Called by the admin dashboard when Felipe hits "Approve & Publish".
+// 1. Loads the photo's saved details from supbase (service role, bypasses RLS)
+// 2. Downloads the image from supbase Storage
+// 3. Creates a DIGITAL product in the Squarespace store via the Commerce API
+//    (assigns it to a category matching the "season" name)
+// 4. Writes the resulting Squarespace product id/url back to supbase, status -> 'published'
+//
+// NOTE: Squarespace's exact Commerce API request/response shape may need
+// adjusting once tested live — this follows their documented v1 Products API
+// as of early 2026, but hasn't been run against a real store yet.
 
-const SUPBASE_URL = process.env.SUPBASE_URL || process.env.SUPBASE_URL;
-const SUPBASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.SUPBASE_SERVICE_ROLE_KEY;
+// Confirmed via debug-env.js (already deployed, actually checkable at
+// /api/debug-env) that the real Vercel env vars are named SUPBASE_URL /
+// SUPBASE_SERVICE_ROLE_KEY -- no "A". This file previously read the
+// correctly-spelled version, which would silently be undefined against
+// the real env vars -- reading both here removes the ambiguity either way.
+const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
+const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
 const SQUARESPACE_API_KEY = process.env.SQUARESPACE_API_KEY;
 const BUCKET = "Ketchup Files UPLOADS";
 
@@ -19,8 +36,8 @@ module.exports = async (req, res) => {
   }
 
   const missingEnvVars = [];
-  if (!SUPBASE_URL) missingEnvVars.push('SUPBASE_URL');
-  if (!SUPBASE_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
+  if (!supbase_URL) missingEnvVars.push('SUPBASE_URL');
+  if (!supbase_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
   if (!SQUARESPACE_API_KEY) missingEnvVars.push('SQUARESPACE_API_KEY');
   if (missingEnvVars.length) {
     res.status(500).json({ error: `Missing Vercel environment variable(s): ${missingEnvVars.join(', ')}` });
@@ -40,8 +57,8 @@ module.exports = async (req, res) => {
   try {
     // 1. Load photo row (service role key bypasses RLS)
     const photoRes = await fetch(
-      `${SUPBASE_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
-      { headers: SUPBASEHeaders() }
+      `${supbase_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
+      { headers: supbaseHeaders() }
     );
     const photos = await photoRes.json();
     const photo = photos && photos[0];
@@ -50,8 +67,8 @@ module.exports = async (req, res) => {
       throw new Error('Photo is missing title, city, season, or price');
     }
 
-    // 2. Public image URL from SUPBASE Storage
-    const imageUrl = `${SUPBASE_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
+    // 2. Public image URL from supbase Storage
+    const imageUrl = `${supbase_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
 
     // 3. Find the store collection matching this city + season, however
     // it happens to be named — matching flexibly on whether the page
@@ -72,10 +89,10 @@ module.exports = async (req, res) => {
       imageUrl
     });
 
-    // 5. Write back to SUPBASE
-    await fetch(`${SUPBASE_URL}/rest/v1/photos?id=eq.${photo_id}`, {
+    // 5. Write back to supbase
+    await fetch(`${supbase_URL}/rest/v1/photos?id=eq.${photo_id}`, {
       method: 'PATCH',
-      headers: { ...SUPBASEHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
       body: JSON.stringify({
         status: 'published',
         squarespace_product_id: product.id,
@@ -91,10 +108,10 @@ module.exports = async (req, res) => {
   }
 };
 
-function SUPBASEHeaders() {
+function supbaseHeaders() {
   return {
-    apikey: SUPBASE_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${SUPBASE_SERVICE_ROLE_KEY}`
+    apikey: supbase_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${supbase_SERVICE_ROLE_KEY}`
   };
 }
 
@@ -154,7 +171,14 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     // Squarespace's checkout starts asking buyers for a shipping
     // address — that's the next thing to watch for once this succeeds.
     storePageId: storePageId,
-    name: title,
+    // Squarespace's own product "type" field is stuck as PHYSICAL --
+    // that's the confirmed API restriction, not something a label can
+    // change. What we DO control is what it's actually called: adding
+    // "(Digital Download)" here makes it obvious everywhere this shows
+    // up -- your Squarespace backend, order emails, the storefront --
+    // that nothing physical ships, even though the underlying type
+    // says otherwise.
+    name: title + ' (Digital Download)',
     description: fullDescription,
     isVisible: true,
     tags: [city, season, 'Ketchup Files'].concat(hashtagList),
@@ -194,12 +218,13 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
   const product = await createRes.json();
   var diagnostics = [];
 
-  // Set stock to unlimited via a dedicated Inventory follow-up call —
+  // Set stock to 10 units via a dedicated Inventory follow-up call —
   // PHYSICAL products appear to default stock to 0 (out of stock) when
   // not set at creation. This is why an Inventory-scoped API key was
   // needed separately from Products — Squarespace likely tracks stock
   // through its own endpoint rather than through the product/variant
-  // body. Best-guess endpoint shape, non-fatal if wrong.
+  // body. 10 is a deliberate limited-run choice, not unlimited — Best-
+  // guess endpoint shape, non-fatal if wrong.
   try {
     const variantId = product.variants && product.variants[0] && product.variants[0].id;
     if (variantId) {
@@ -207,7 +232,7 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
         method: 'PATCH',
         headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          inventory: [{ variantId: variantId, unlimited: true }]
+          inventory: [{ variantId: variantId, unlimited: false, quantity: 10 }]
         })
       });
       if (!inventoryRes.ok) {
