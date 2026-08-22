@@ -365,7 +365,7 @@
     }
     if(!update.data || !update.data.length){
       btn.disabled = false;
-      msgEl.textContent = 'Update didn\'t apply — likely a database permission (RLS) rule blocking admin writes on this row. Check the photos table\'s UPDATE policy in Supabase.';
+      msgEl.textContent = 'Update didn\'t apply — likely a database permission (RLS) rule blocking admin writes on this row. Check the photos table\'s UPDATE policy in SUPBASE.';
       msgEl.className = 'kf-msg err';
       return;
     }
@@ -414,7 +414,7 @@
       // exactly like "nothing happened."
       if(btn) btn.disabled = false;
       if(msgEl){
-        msgEl.textContent = 'Update didn\'t apply — likely a database permission (RLS) rule blocking admin writes on this row. Check the photos table\'s UPDATE policy in Supabase.';
+        msgEl.textContent = 'Update didn\'t apply — likely a database permission (RLS) rule blocking admin writes on this row. Check the photos table\'s UPDATE policy in SUPBASE.';
         msgEl.className = 'kf-msg err';
       }
       return;
