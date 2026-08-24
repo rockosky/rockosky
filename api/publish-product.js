@@ -68,6 +68,7 @@ module.exports = async (req, res) => {
       season: photo.season,
       hashtags: photo.hashtags || '',
       socialUrl: photo.social_url || '',
+      mediaType: photo.media_type || 'image',
       storePageId,
       imageUrl
     });
@@ -138,11 +139,21 @@ async function getOrCreateStorePage(city, season) {
   );
 }
 
-async function createSquarespaceProduct({ title, description, priceCents, city, season, hashtags, socialUrl, storePageId, imageUrl }) {
+async function createSquarespaceProduct({ title, description, priceCents, city, season, hashtags, socialUrl, mediaType, storePageId, imageUrl }) {
   var hashtagList = (hashtags || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean);
   var fullDescription = description + `\n\nLocation: ${city} — ${season}`
     + (hashtagList.length ? `\n\n${hashtagList.map(t => '#' + t.replace(/^#/, '')).join(' ')}` : '')
     + (socialUrl ? `\n\nProfile / Link: ${socialUrl}` : '');
+
+  // "Buy this Image / Video / GIF / Audio / File" prefix, based on
+  // what was actually uploaded -- Squarespace's checkout button text
+  // itself is a fixed theme element the Products API can't change, but
+  // this makes the same intent clear in the one place we DO control:
+  // the product title, which is what shows right next to that button.
+  var mediaLabelMap = { image: 'Image', video: 'Video', audio: 'Audio', raw: 'RAW File', file: 'File' };
+  var mediaLabel = mediaLabelMap[mediaType] || 'Image';
+  if (mediaType === 'image' && /\.gif$/i.test(title)) mediaLabel = 'GIF';
+  var buyPrefix = 'Buy this ' + mediaLabel + ': ';
 
   const body = {
     type: 'PHYSICAL',
@@ -161,7 +172,7 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     // up -- your Squarespace backend, order emails, the storefront --
     // that nothing physical ships, even though the underlying type
     // says otherwise.
-    name: title + ' (Digital Download)',
+    name: buyPrefix + title + ' (Digital Download)',
     description: fullDescription,
     isVisible: true,
     tags: [city, season, 'Ketchup Files'].concat(hashtagList),
@@ -201,13 +212,15 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
   const product = await createRes.json();
   var diagnostics = [];
 
-  // Set stock to 10 units via a dedicated Inventory follow-up call —
-  // PHYSICAL products appear to default stock to 0 (out of stock) when
-  // not set at creation. This is why an Inventory-scoped API key was
-  // needed separately from Products — Squarespace likely tracks stock
-  // through its own endpoint rather than through the product/variant
-  // body. 10 is a deliberate limited-run choice, not unlimited — Best-
-  // guess endpoint shape, non-fatal if wrong.
+  // Set stock to genuinely unlimited via a dedicated Inventory follow-up
+  // call. Previously used a finite quantity (10), but that produced a
+  // real bug: the product would sometimes show "Out of Stock" on the
+  // storefront even while inventory was confirmed available in
+  // Squarespace's own backend. Switching to unlimited removes the bug
+  // class entirely -- there's no finite count left to miscalculate --
+  // and Squarespace doesn't show a stock counter for unlimited items,
+  // satisfying "don't show the count" without extra work. Best-guess
+  // endpoint shape, non-fatal if wrong.
   try {
     const variantId = product.variants && product.variants[0] && product.variants[0].id;
     if (variantId) {
@@ -215,7 +228,7 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
         method: 'PATCH',
         headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          inventory: [{ variantId: variantId, unlimited: false, quantity: 10 }]
+          inventory: [{ variantId: variantId, unlimited: true }]
         })
       });
       if (!inventoryRes.ok) {
