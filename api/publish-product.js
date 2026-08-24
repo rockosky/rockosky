@@ -1,11 +1,11 @@
 // /api/publish-product.js
 //
 // Called by the admin dashboard when Felipe hits "Approve & Publish".
-// 1. Loads the photo's saved details from supbase (service role, bypasses RLS)
-// 2. Downloads the image from supbase Storage
+// 1. Loads the photo's saved details from SUPBASE (service role, bypasses RLS)
+// 2. Downloads the image from SUPBASE Storage
 // 3. Creates a DIGITAL product in the Squarespace store via the Commerce API
 //    (assigns it to a category matching the "season" name)
-// 4. Writes the resulting Squarespace product id/url back to supbase, status -> 'published'
+// 4. Writes the resulting Squarespace product id/url back to SUPBASE, status -> 'published'
 //
 // NOTE: Squarespace's exact Commerce API request/response shape may need
 // adjusting once tested live — this follows their documented v1 Products API
@@ -16,8 +16,8 @@
 // SUPBASE_SERVICE_ROLE_KEY -- no "A". This file previously read the
 // correctly-spelled version, which would silently be undefined against
 // the real env vars -- reading both here removes the ambiguity either way.
-const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
-const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
+const SUPBASE_URL = process.env.SUPBASE_URL || process.env.SUPBASE_URL;
+const SUPBASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.SUPBASE_SERVICE_ROLE_KEY;
 const SQUARESPACE_API_KEY = process.env.SQUARESPACE_API_KEY;
 const BUCKET = "Ketchup Files UPLOADS";
 
@@ -36,15 +36,15 @@ module.exports = async (req, res) => {
   }
 
   const missingEnvVars = [];
-  if (!supbase_URL) missingEnvVars.push('SUPBASE_URL');
-  if (!supbase_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
+  if (!SUPBASE_URL) missingEnvVars.push('SUPBASE_URL');
+  if (!SUPBASE_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
   if (!SQUARESPACE_API_KEY) missingEnvVars.push('SQUARESPACE_API_KEY');
   if (missingEnvVars.length) {
     res.status(500).json({ error: `Missing Vercel environment variable(s): ${missingEnvVars.join(', ')}` });
     return;
   }
 
-  const { photo_id, product_type } = req.body || {};
+  const { photo_id, product_type, auto } = req.body || {};
   if (!photo_id) {
     res.status(400).json({ error: 'photo_id is required' });
     return;
@@ -54,11 +54,28 @@ module.exports = async (req, res) => {
     return;
   }
 
+  // REAL BUG FIX: 02's upload flow calls this endpoint with auto:true
+  // right after every single upload, on the assumption that this would
+  // only actually publish if it could land as a genuine DIGITAL
+  // product -- keeping admin curation intact for everything else. That
+  // gate was never implemented here, so every upload was silently
+  // auto-publishing straight to Squarespace as PHYSICAL with zero admin
+  // review. Since true DIGITAL creation is confirmed impossible via
+  // this API (see the check above), an auto request can never
+  // currently satisfy that condition -- so it's always held for normal
+  // review in 03, exactly as the original design intended. If
+  // Squarespace ever allows real DIGITAL creation in the future, this
+  // is the one line to change.
+  if (auto === true) {
+    res.status(200).json({ ok: true, held: true, reason: 'Auto-publish only applies to true Digital products, which Squarespace does not currently allow creating via this API. Held for normal admin review.' });
+    return;
+  }
+
   try {
     // 1. Load photo row (service role key bypasses RLS)
     const photoRes = await fetch(
-      `${supbase_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
-      { headers: supbaseHeaders() }
+      `${SUPBASE_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
+      { headers: SUPBASEHeaders() }
     );
     const photos = await photoRes.json();
     const photo = photos && photos[0];
@@ -67,8 +84,8 @@ module.exports = async (req, res) => {
       throw new Error('Photo is missing title, city, season, or price');
     }
 
-    // 2. Public image URL from supbase Storage
-    const imageUrl = `${supbase_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
+    // 2. Public image URL from SUPBASE Storage
+    const imageUrl = `${SUPBASE_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
 
     // 3. Find the store collection matching this city + season, however
     // it happens to be named — matching flexibly on whether the page
@@ -90,10 +107,10 @@ module.exports = async (req, res) => {
       imageUrl
     });
 
-    // 5. Write back to supbase
-    await fetch(`${supbase_URL}/rest/v1/photos?id=eq.${photo_id}`, {
+    // 5. Write back to SUPBASE
+    await fetch(`${SUPBASE_URL}/rest/v1/photos?id=eq.${photo_id}`, {
       method: 'PATCH',
-      headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      headers: { ...SUPBASEHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
       body: JSON.stringify({
         status: 'published',
         squarespace_product_id: product.id,
@@ -109,10 +126,10 @@ module.exports = async (req, res) => {
   }
 };
 
-function supbaseHeaders() {
+function SUPBASEHeaders() {
   return {
-    apikey: supbase_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${supbase_SERVICE_ROLE_KEY}`
+    apikey: SUPBASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${SUPBASE_SERVICE_ROLE_KEY}`
   };
 }
 
