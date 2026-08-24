@@ -1,4 +1,21 @@
+// /api/publish-product.js
+//
+// Called by the admin dashboard when Felipe hits "Approve & Publish".
+// 1. Loads the photo's saved details from supbase (service role, bypasses RLS)
+// 2. Downloads the image from supbase Storage
+// 3. Creates a DIGITAL product in the Squarespace store via the Commerce API
+//    (assigns it to a category matching the "season" name)
+// 4. Writes the resulting Squarespace product id/url back to supbase, status -> 'published'
+//
+// NOTE: Squarespace's exact Commerce API request/response shape may need
+// adjusting once tested live — this follows their documented v1 Products API
+// as of early 2026, but hasn't been run against a real store yet.
 
+// Confirmed via debug-env.js (already deployed, actually checkable at
+// /api/debug-env) that the real Vercel env vars are named SUPBASE_URL /
+// SUPBASE_SERVICE_ROLE_KEY -- no "A". This file previously read the
+// correctly-spelled version, which would silently be undefined against
+// the real env vars -- reading both here removes the ambiguity either way.
 const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
 const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
 const SQUARESPACE_API_KEY = process.env.SQUARESPACE_API_KEY;
