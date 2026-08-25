@@ -283,7 +283,16 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
       });
       if (!inventoryRes.ok) {
         const invErrText = await inventoryRes.text();
-        diagnostics.push('Inventory: ' + invErrText.substring(0, 200));
+        // A live test returned AUTHORIZATION_ERROR here specifically --
+        // that's Squarespace's API key itself lacking permission for
+        // Inventory, not a bug in this request. Flagging that plainly so
+        // it isn't mistaken for something fixable in code: check
+        // Settings -> Advanced -> API Keys on the Squarespace account
+        // and confirm the key used here has Inventory access enabled.
+        var isAuthError = invErrText.indexOf('AUTHORIZATION_ERROR') !== -1;
+        diagnostics.push('Inventory: ' + (isAuthError
+          ? 'FAILED -- API key lacks Inventory permission. Fix in Squarespace: Settings > Advanced > API Keys > enable Inventory scope on this key.'
+          : invErrText.substring(0, 200)));
       } else {
         diagnostics.push('Inventory: OK');
       }
@@ -312,13 +321,12 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
       const filename = (imageUrl.split('/').pop() || 'photo.png').split('?')[0];
 
       const form = new FormData();
-      form.append('image', new Blob([imageBuffer], { type: contentType }), filename);
+      // Squarespace's real error (confirmed from a live test run) was
+      // explicit: "Expected exactly one file part named 'file'" -- the
+      // field name below was previously 'image', which is why every
+      // upload failed. This was a plain typo, not a guess.
+      form.append('file', new Blob([imageBuffer], { type: contentType }), filename);
 
-      // Best-guess endpoint/field name for the multipart upload itself
-      // -- not confirmed against a live response yet, unlike the other
-      // findings in this file which came from real testing. Logs the
-      // raw response either way so the next real test confirms or
-      // corrects this specific guess.
       const imageUploadRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${product.id}/images`, {
         method: 'POST',
         // Deliberately not setting Content-Type by hand -- fetch sets
@@ -334,11 +342,17 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     diagnostics.push('Image: FAILED -- ' + imageErr.message);
   }
 
+  // isVisible toggle -- confirmed from a live test run that this endpoint
+  // rejects PATCH outright ("Method 'PATCH' is not supported"). Switched
+  // to PUT, which is what Squarespace's Commerce Products API actually
+  // exposes for updates. Includes `type` alongside isVisible since PUT
+  // endpoints on this API have been observed elsewhere in testing to
+  // want at least that field present, not just the one being changed.
   try {
     const patchRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${product.id}`, {
-      method: 'PATCH',
+      method: 'PUT',
       headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isVisible: true })
+      body: JSON.stringify({ isVisible: true, type: product.type })
     });
     if (!patchRes.ok) {
       const patchErrText = await patchRes.text();
