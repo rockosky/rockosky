@@ -1,11 +1,11 @@
 // /api/publish-product.js
 //
 // Called by the admin dashboard when Felipe hits "Approve & Publish".
-// 1. Loads the photo's saved details from SUPBASE (service role, bypasses RLS)
-// 2. Downloads the image from SUPBASE Storage
+// 1. Loads the photo's saved details from supbase (service role, bypasses RLS)
+// 2. Downloads the image from supbase Storage
 // 3. Creates a DIGITAL product in the Squarespace store via the Commerce API
 //    (assigns it to a category matching the "season" name)
-// 4. Writes the resulting Squarespace product id/url back to SUPBASE, status -> 'published'
+// 4. Writes the resulting Squarespace product id/url back to supbase, status -> 'published'
 //
 // NOTE: Squarespace's exact Commerce API request/response shape may need
 // adjusting once tested live — this follows their documented v1 Products API
@@ -16,8 +16,8 @@
 // SUPBASE_SERVICE_ROLE_KEY -- no "A". This file previously read the
 // correctly-spelled version, which would silently be undefined against
 // the real env vars -- reading both here removes the ambiguity either way.
-const SUPBASE_URL = process.env.SUPBASE_URL || process.env.SUPBASE_URL;
-const SUPBASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.SUPBASE_SERVICE_ROLE_KEY;
+const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
+const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
 const SQUARESPACE_API_KEY = process.env.SQUARESPACE_API_KEY;
 const BUCKET = "Ketchup Files UPLOADS";
 
@@ -36,8 +36,8 @@ module.exports = async (req, res) => {
   }
 
   const missingEnvVars = [];
-  if (!SUPBASE_URL) missingEnvVars.push('SUPBASE_URL');
-  if (!SUPBASE_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
+  if (!supbase_URL) missingEnvVars.push('SUPBASE_URL');
+  if (!supbase_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
   if (!SQUARESPACE_API_KEY) missingEnvVars.push('SQUARESPACE_API_KEY');
   if (missingEnvVars.length) {
     res.status(500).json({ error: `Missing Vercel environment variable(s): ${missingEnvVars.join(', ')}` });
@@ -74,8 +74,8 @@ module.exports = async (req, res) => {
   try {
     // 1. Load photo row (service role key bypasses RLS)
     const photoRes = await fetch(
-      `${SUPBASE_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
-      { headers: SUPBASEHeaders() }
+      `${supbase_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
+      { headers: supbaseHeaders() }
     );
     const photos = await photoRes.json();
     const photo = photos && photos[0];
@@ -84,8 +84,8 @@ module.exports = async (req, res) => {
       throw new Error('Photo is missing title, city, season, or price');
     }
 
-    // 2. Public image URL from SUPBASE Storage
-    const imageUrl = `${SUPBASE_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
+    // 2. Public image URL from supbase Storage
+    const imageUrl = `${supbase_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
 
     // 3. Find the store collection matching this city + season, however
     // it happens to be named — matching flexibly on whether the page
@@ -103,14 +103,15 @@ module.exports = async (req, res) => {
       hashtags: photo.hashtags || '',
       socialUrl: photo.social_url || '',
       mediaType: photo.media_type || 'image',
+      photoId: photo.id,
       storePageId,
       imageUrl
     });
 
-    // 5. Write back to SUPBASE
-    await fetch(`${SUPBASE_URL}/rest/v1/photos?id=eq.${photo_id}`, {
+    // 5. Write back to supbase
+    await fetch(`${supbase_URL}/rest/v1/photos?id=eq.${photo_id}`, {
       method: 'PATCH',
-      headers: { ...SUPBASEHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
       body: JSON.stringify({
         status: 'published',
         squarespace_product_id: product.id,
@@ -126,10 +127,10 @@ module.exports = async (req, res) => {
   }
 };
 
-function SUPBASEHeaders() {
+function supbaseHeaders() {
   return {
-    apikey: SUPBASE_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${SUPBASE_SERVICE_ROLE_KEY}`
+    apikey: supbase_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${supbase_SERVICE_ROLE_KEY}`
   };
 }
 
@@ -173,7 +174,7 @@ async function getOrCreateStorePage(city, season) {
   );
 }
 
-async function createSquarespaceProduct({ title, description, priceCents, city, season, hashtags, socialUrl, mediaType, storePageId, imageUrl }) {
+async function createSquarespaceProduct({ title, description, priceCents, city, season, hashtags, socialUrl, mediaType, photoId, storePageId, imageUrl }) {
   var hashtagList = (hashtags || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean);
   var fullDescription = description + `\n\nLocation: ${city} — ${season}`
     + (hashtagList.length ? `\n\n${hashtagList.map(t => '#' + t.replace(/^#/, '')).join(' ')}` : '')
@@ -186,8 +187,16 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
   // the product title, which is what shows right next to that button.
   var mediaLabelMap = { image: 'Image', video: 'Video', audio: 'Audio', raw: 'RAW File', file: 'File' };
   var mediaLabel = mediaLabelMap[mediaType] || 'Image';
-  if (mediaType === 'image' && /\.gif$/i.test(title)) mediaLabel = 'GIF';
+  var isGif = mediaType === 'image' && /\.gif$/i.test(title);
+  if (isGif) mediaLabel = 'GIF';
   var buyPrefix = 'Buy this ' + mediaLabel + ': ';
+
+  // SKU media code -- KF-{MEDIA}-{ASSET_ID} per spec. Deliberately its
+  // own map rather than reusing mediaLabelMap above: that one needs
+  // full words for the button-prefix text ("Image", "RAW File"), this
+  // one needs fixed 3-letter codes (IMG, not IMA from slicing "Image").
+  var skuMediaCodeMap = { image: 'IMG', video: 'VID', audio: 'AUD', raw: 'RAW', file: 'DOC' };
+  var skuMediaCode = isGif ? 'GIF' : (skuMediaCodeMap[mediaType] || 'IMG');
 
   const body = {
     type: 'PHYSICAL',
@@ -213,7 +222,14 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     variants: [
       {
         pricing: { basePrice: { currency: 'USD', value: (priceCents / 100).toFixed(2) } },
-        sku: `KF-${Date.now()}`
+        // KF-{MEDIA}-{ASSET_ID}, using the real photos.id -- not a
+        // timestamp (the previous KF-${Date.now()} produced a
+        // different SKU every time the same photo got re-published,
+        // and looked like a raw millisecond count, e.g.
+        // KF-1787596299037, rather than a real product identifier).
+        // Using the actual row id keeps this identical no matter which
+        // widget (02, 04, Interfaz Studio) triggers the publish.
+        sku: `KF-${skuMediaCode}-${photoId}`
         // 'stock' removed for now — rejected as wrong type both as a
         // number and a string, with the identical error either way.
         // That pattern suggests 'stock' may not be a valid field at all
