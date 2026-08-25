@@ -1,6 +1,6 @@
 
-const SUPABASE_URL = process.env.SUPBASE_URL || process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
+const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
 const SQUARESPACE_API_KEY = process.env.SQUARESPACE_API_KEY;
 const BUCKET = "Ketchup Files UPLOADS";
 
@@ -19,8 +19,8 @@ module.exports = async (req, res) => {
   }
 
   const missingEnvVars = [];
-  if (!SUPABASE_URL) missingEnvVars.push('SUPBASE_URL');
-  if (!SUPABASE_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
+  if (!supbase_URL) missingEnvVars.push('SUPBASE_URL');
+  if (!supbase_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
   if (!SQUARESPACE_API_KEY) missingEnvVars.push('SQUARESPACE_API_KEY');
   if (missingEnvVars.length) {
     res.status(500).json({ error: `Missing Vercel environment variable(s): ${missingEnvVars.join(', ')}` });
@@ -57,8 +57,8 @@ module.exports = async (req, res) => {
   try {
     // 1. Load photo row (service role key bypasses RLS)
     const photoRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
-      { headers: supabaseHeaders() }
+      `${supbase_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
+      { headers: supbaseHeaders() }
     );
     const photos = await photoRes.json();
     const photo = photos && photos[0];
@@ -67,8 +67,8 @@ module.exports = async (req, res) => {
       throw new Error('Photo is missing title, city, season, or price');
     }
 
-    // 2. Public image URL from Supabase Storage
-    const imageUrl = `${SUPABASE_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
+    // 2. Public image URL from supbase Storage
+    const imageUrl = `${supbase_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
 
     // 3. Find the store collection matching this city + season, however
     // it happens to be named — matching flexibly on whether the page
@@ -91,10 +91,10 @@ module.exports = async (req, res) => {
       imageUrl
     });
 
-    // 5. Write back to Supabase
-    await fetch(`${SUPABASE_URL}/rest/v1/photos?id=eq.${photo_id}`, {
+    // 5. Write back to supbase
+    await fetch(`${supbase_URL}/rest/v1/photos?id=eq.${photo_id}`, {
       method: 'PATCH',
-      headers: { ...supabaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
       body: JSON.stringify({
         status: 'published',
         squarespace_product_id: product.id,
@@ -110,10 +110,10 @@ module.exports = async (req, res) => {
   }
 };
 
-function supabaseHeaders() {
+function supbaseHeaders() {
   return {
-    apikey: SUPABASE_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+    apikey: supbase_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${supbase_SERVICE_ROLE_KEY}`
   };
 }
 
