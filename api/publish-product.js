@@ -262,37 +262,11 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
   const product = await createRes.json();
   var diagnostics = [];
 
-  // Set stock to genuinely unlimited via a dedicated Inventory follow-up
-  // call. Previously used a finite quantity (10), but that produced a
-  // real bug: the product would sometimes show "Out of Stock" on the
-  // storefront even while inventory was confirmed available in
-  // Squarespace's own backend. Switching to unlimited removes the bug
-  // class entirely -- there's no finite count left to miscalculate --
-  // and Squarespace doesn't show a stock counter for unlimited items,
-  // satisfying "don't show the count" without extra work. Best-guess
-  // endpoint shape, non-fatal if wrong.
-  try {
-    const variantId = product.variants && product.variants[0] && product.variants[0].id;
-    if (variantId) {
-      const inventoryRes = await fetch('https://api.squarespace.com/1.0/commerce/inventory', {
-        method: 'PATCH',
-        headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          inventory: [{ variantId: variantId, unlimited: true }]
-        })
-      });
-      if (!inventoryRes.ok) {
-        const invErrText = await inventoryRes.text();
-        diagnostics.push('Inventory: ' + invErrText.substring(0, 200));
-      } else {
-        diagnostics.push('Inventory: OK');
-      }
-    } else {
-      diagnostics.push('Inventory: skipped, no variant ID found');
-    }
-  } catch (inventoryErr) {
-    diagnostics.push('Inventory: ' + inventoryErr.message);
-  }
+  // Squarespace publishes the product during the create request above.
+  // Do not call the Inventory PATCH endpoint here: the connected API key
+  // does not have permission for that endpoint, and inventory is not
+  // required to complete this publishing flow.
+  diagnostics.push('Inventory: skipped (not required for publishing)');
 
   // Attach the image as a real multipart file upload. The previous
   // version of this sent `images: [{ url: imageUrl }]` on the PATCH
@@ -312,7 +286,7 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
       const filename = (imageUrl.split('/').pop() || 'photo.png').split('?')[0];
 
       const form = new FormData();
-      form.append('image', new Blob([imageBuffer], { type: contentType }), filename);
+      form.append('file', new Blob([imageBuffer], { type: contentType }), filename);
 
       // Best-guess endpoint/field name for the multipart upload itself
       // -- not confirmed against a live response yet, unlike the other
@@ -334,21 +308,10 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     diagnostics.push('Image: FAILED -- ' + imageErr.message);
   }
 
-  try {
-    const patchRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${product.id}`, {
-      method: 'PATCH',
-      headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isVisible: true })
-    });
-    if (!patchRes.ok) {
-      const patchErrText = await patchRes.text();
-      diagnostics.push('Visibility: FAILED -- ' + patchErrText.substring(0, 200));
-    } else {
-      diagnostics.push('Visibility: OK');
-    }
-  } catch (patchErr) {
-    diagnostics.push('Visibility: FAILED -- ' + patchErr.message);
-  }
+  // Visibility is already supplied as isVisible:true in the POST body.
+  // Squarespace rejects PATCH on this product resource, so no second
+  // visibility request is needed.
+  diagnostics.push('Visibility: set during product creation');
 
   return { id: product.id, url: product.url || '', diagnostics: diagnostics.join(' | ') };
 }
