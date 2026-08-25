@@ -288,12 +288,10 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
       const form = new FormData();
       form.append('file', new Blob([imageBuffer], { type: contentType }), filename);
 
-      // Best-guess endpoint/field name for the multipart upload itself
-      // -- not confirmed against a live response yet, unlike the other
-      // findings in this file which came from real testing. Logs the
-      // raw response either way so the next real test confirms or
-      // corrects this specific guess.
-      const imageUploadRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${product.id}/images`, {
+      // Squarespace Products API v2 accepts the image bytes as one
+      // multipart field named "file". A successful request returns 202
+      // with an imageId while Squarespace processes the image.
+      const imageUploadRes = await fetch(`https://api.squarespace.com/v2/commerce/products/${product.id}/images`, {
         method: 'POST',
         // Deliberately not setting Content-Type by hand -- fetch sets
         // the correct multipart boundary automatically for a FormData body.
