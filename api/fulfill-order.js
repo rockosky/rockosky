@@ -1,41 +1,4 @@
-// /api/fulfill-order.js
-//
-// Squarespace calls this URL (as a webhook) when an order comes in.
-// This looks up which photo(s) were purchased, generates a short-lived
-// signed link to the CLEAN original (no watermark — that file lives in
-// a separate PRIVATE bucket the public site never touches), and emails
-// it to the buyer.
-//
-// ============================================================
-// ONE-TIME SETUP NEEDED (none of this is automatic yet):
-//
-// 1. Create a PRIVATE supbase Storage bucket named exactly
-//    "Ketchup Files ORIGINALS" (public access OFF — this is the whole
-//    point, it should never be reachable except via a signed URL this
-//    endpoint generates). The uploader now writes the clean original
-//    here automatically on every new upload; anything uploaded before
-//    this was added won't have one — those rows will just have a null
-//    original_file_path, and this endpoint will say so instead of
-//    sending a broken link.
-//
-// 2. Set these environment variables in Vercel:
-//      SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM
-//      (whatever real SMTP provider you're using — Gmail, Postmark,
-//      Resend's SMTP mode, etc. This file doesn't assume which one.)
-//    Optionally: SQUARESPACE_WEBHOOK_SECRET, if you want signature
-//    verification (see verifyWebhookSignature below — Squarespace's
-//    exact signing scheme isn't hard-verified here yet since it hasn't
-//    been tested against a real payload; treat that check as best-effort
-//    until confirmed).
-//
-// 3. Register this URL as a webhook subscription in Squarespace,
-//    subscribed to order creation/fulfillment. Squarespace's exact
-//    webhook payload shape is assumed below based on their documented
-//    order object — the first real webhook that comes in should be
-//    checked against what's actually parsed here (this endpoint logs
-//    the full raw payload on every call specifically so that's easy to
-//    verify and adjust if the real shape differs).
-// ============================================================
+
 
 const nodemailer = require('nodemailer');
 
