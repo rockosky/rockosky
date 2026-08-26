@@ -1,4 +1,4 @@
-// jarvis-vercel.js
+// jarvis-verbal.js
 //
 // Jarvis's voice, on its own: real browser speech recognition (listening)
 // and real speech synthesis (speaking back) -- the same logic that runs
