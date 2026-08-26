@@ -1,4 +1,18 @@
-
+// /api/jarvis-chat.js
+//
+// Proxies conversation requests from the Jarvis widgets (the floating
+// companion dot, and the full Jarvis Network view in Interfaz Studio) to
+// the real Anthropic API. This exists ONLY because a browser cannot call
+// api.anthropic.com directly with no key and expect a response -- the key
+// has to live somewhere that isn't shipped to every visitor's browser.
+// This function holds it as a Vercel environment variable instead.
+//
+// Deploy this alongside your other /api functions (same project as
+// publish-product.js), then set an Anthropic API key as an environment
+// variable named ANTHROPIC_API_KEY in the Vercel project settings.
+// Get a key at https://console.anthropic.com/settings/keys -- note this
+// is a paid API, billed per request, separate from any Claude.ai
+// subscription.
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
