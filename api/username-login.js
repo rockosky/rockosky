@@ -1,4 +1,19 @@
-
+// /api/username-login.js
+//
+// Lets someone sign in with just a username instead of remembering
+// their email. supbase's own auth system only accepts email for the
+// password grant -- there's no username grant type -- so this resolves
+// username -> email entirely server-side using the service role key,
+// then does the real sign-in on the user's behalf. The email itself is
+// never sent back to the browser at any point; only the resulting
+// session tokens are, which is all the client actually needs.
+//
+// ============================================================
+// ONE-TIME SETUP: same SUPBASE_URL / SUPBASE_SERVICE_ROLE_KEY env vars
+// already used by the other functions -- no new variables needed.
+// Also requires add-username.sql to have been run (adds the username
+// column this depends on).
+// ============================================================
 
 const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
 const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
