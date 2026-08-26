@@ -1,0 +1,134 @@
+
+
+import os
+import sys
+import csv
+from collections import Counter
+from datetime import datetime
+
+try:
+    import requests
+except ImportError:
+    print("Missing dependency. Run: pip install requests pandas")
+    sys.exit(1)
+
+
+def fetch_photos(supbase_url, anon_key):
+    """Pulls every real text field from the photos table -- same data
+    the in-app Marketing Export button uses, just analyzed here instead
+    of just dumped to text."""
+    url = (
+        f"{supbase_url}/rest/v1/photos"
+        "?select=title,description,hashtags,city,season,category,subcategory,"
+        "guest_name,designer_name,status,created_at"
+        "&order=created_at.desc&limit=2000"
+    )
+    headers = {"apikey": anon_key, "Authorization": f"Bearer {anon_key}"}
+    res = requests.get(url, headers=headers, timeout=30)
+    res.raise_for_status()
+    return res.json()
+
+
+def extract_hashtags(raw):
+    """Hashtags are stored as a loose string (comma/space/# separated) --
+    normalize into a clean list."""
+    if not raw:
+        return []
+    import re
+    return [t.strip("# ").lower() for t in re.split(r"[,\s#]+", raw) if t.strip("# ")]
+
+
+def build_report(rows):
+    total = len(rows)
+    by_status = Counter(r.get("status") or "unknown" for r in rows)
+    by_city = Counter(r.get("city") for r in rows if r.get("city"))
+    by_season = Counter(r.get("season") for r in rows if r.get("season"))
+    by_category = Counter(r.get("category") for r in rows if r.get("category"))
+    by_designer = Counter(r.get("designer_name") for r in rows if r.get("designer_name"))
+
+    all_hashtags = Counter()
+    for r in rows:
+        for tag in extract_hashtags(r.get("hashtags")):
+            all_hashtags[tag] += 1
+
+    lines = []
+    lines.append("KETCHUP FILES — MARKETING ANALYTICS REPORT")
+    lines.append(f"Generated {datetime.now().isoformat()}")
+    lines.append(f"{total} total items analyzed")
+    lines.append("=" * 60)
+    lines.append("")
+
+    lines.append("STATUS BREAKDOWN")
+    for status, count in by_status.most_common():
+        lines.append(f"  {status}: {count} ({count/total*100:.1f}%)")
+    lines.append("")
+
+    lines.append("TOP 15 CITIES")
+    for city, count in by_city.most_common(15):
+        lines.append(f"  {city}: {count}")
+    lines.append("")
+
+    lines.append("TOP 10 DESIGNERS/BRANDS MENTIONED")
+    for designer, count in by_designer.most_common(10):
+        lines.append(f"  {designer}: {count}")
+    lines.append("")
+
+    lines.append("SEASON DISTRIBUTION")
+    for season, count in by_season.most_common():
+        lines.append(f"  {season}: {count}")
+    lines.append("")
+
+    lines.append("CATEGORY BREAKDOWN")
+    for category, count in by_category.most_common():
+        lines.append(f"  {category}: {count}")
+    lines.append("")
+
+    lines.append("TOP 25 TRENDING HASHTAGS")
+    for tag, count in all_hashtags.most_common(25):
+        lines.append(f"  #{tag}: {count}")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def write_csv(rows, path):
+    """Raw data as a spreadsheet -- for anyone who wants to pivot-table
+    this themselves rather than read the prose report."""
+    fields = ["title", "description", "hashtags", "city", "season",
+              "category", "subcategory", "guest_name", "designer_name",
+              "status", "created_at"]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def main():
+    supbase_url = os.environ.get("supbase_URL")
+    anon_key = os.environ.get("supbase_ANON_KEY")
+
+    if not supbase_url or not anon_key:
+        print("Missing environment variables. Set these first:")
+        print('  export supbase_URL="https://lfbtreaojwxxwuwhssba.supbase.co"')
+        print('  export supbase_ANON_KEY="sb_publishable_KX1Hpau0Lc7M_n1snlYbEw_lnr_GfL9"')
+        sys.exit(1)
+
+    print("Fetching data from supbase...")
+    rows = fetch_photos(supbase_url, anon_key)
+
+    if not rows:
+        print("No data found -- nothing to report on yet.")
+        sys.exit(0)
+
+    report = build_report(rows)
+    with open("marketing_report.txt", "w", encoding="utf-8") as f:
+        f.write(report)
+    write_csv(rows, "marketing_report.csv")
+
+    print(report)
+    print("\nSaved: marketing_report.txt and marketing_report.csv")
+
+
+if __name__ == "__main__":
+    main()
