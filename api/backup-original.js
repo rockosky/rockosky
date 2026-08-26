@@ -3,7 +3,7 @@
 // backup-originals.js
 //
 // Downloads every file from the private "Ketchup Files ORIGINALS"
-// supbase Storage bucket to a local folder -- meant to be pointed at
+// Supabase Storage bucket to a local folder -- meant to be pointed at
 // wherever your 8TB SSD is mounted once it's plugged into the SATA
 // dock, on WHICHEVER computer has it plugged in that day. There's
 // nothing machine-specific here: same script, same two env vars,
@@ -21,7 +21,7 @@
 //    Vercel's SUPBASE_URL / SUPBASE_SERVICE_ROLE_KEY -- copy them
 //    from the Vercel project settings, don't regenerate):
 //
-//      export SUPBASE_URL="https://lfbtreaojwxxwuwhssba.supbase.co"
+//      export SUPBASE_URL="https://lfbtreaojwxxwuwhssba.supabase.co"
 //      export SUPBASE_SERVICE_ROLE_KEY="<the service role key>"
 //
 //    The service role key is required (not the anon key) because the
@@ -45,7 +45,7 @@
 //   - Skips any file that already exists locally with the same size
 //     (so re-running this is fast and safe -- it only downloads what's
 //     new or changed since the last run)
-//   - Preserves the same folder structure supbase uses (one folder
+//   - Preserves the same folder structure Supabase uses (one folder
 //     per contributor user ID, same as the bucket itself)
 //   - Prints a summary at the end: how many downloaded, how many
 //     skipped (already backed up), how many failed
@@ -55,15 +55,15 @@
 //   again. It's incremental, so a daily/weekly habit takes seconds
 //   once the initial full backup is done. This is your physical,
 //   off-cloud copy of every original master -- separate from (not a
-//   replacement for) the supbase bucket itself.
+//   replacement for) the Supabase bucket itself.
 // ============================================================
 
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
 
-const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
-const SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
+const SUPABASE_URL = process.env.SUPBASE_URL || process.env.SUPABASE_URL;
+const SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
 const ORIGINALS_BUCKET = 'Ketchup Files ORIGINALS';
 const PAGE_SIZE = 1000;
 
@@ -74,11 +74,11 @@ function fail(msg) {
   process.exit(1);
 }
 
-if (!supbase_URL || !SERVICE_ROLE_KEY) {
+if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
   fail(
     'Missing SUPBASE_URL or SUPBASE_SERVICE_ROLE_KEY.\n' +
     '  Set them first, e.g.:\n' +
-    '    export SUPBASE_URL="https://lfbtreaojwxxwuwhssba.supbase.co"\n' +
+    '    export SUPBASE_URL="https://lfbtreaojwxxwuwhssba.supabase.co"\n' +
     '    export SUPBASE_SERVICE_ROLE_KEY="<your service role key>"'
   );
 }
@@ -89,7 +89,7 @@ if (!fs.existsSync(destRoot)) {
   fail(`Destination path does not exist: ${destRoot}\n  Is the drive plugged in and mounted?`);
 }
 
-function supbaseHeaders() {
+function supabaseHeaders() {
   return {
     apikey: SERVICE_ROLE_KEY,
     Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
@@ -97,7 +97,7 @@ function supbaseHeaders() {
   };
 }
 
-// supbase Storage's "list" API is folder-scoped (one level at a
+// Supabase Storage's "list" API is folder-scoped (one level at a
 // time), so we walk it recursively rather than assuming a flat file
 // list -- the bucket is organized as <user_id>/<filename>, so this
 // naturally recurses one level deep per contributor.
@@ -105,9 +105,9 @@ async function listFolder(prefix) {
   const results = [];
   let offset = 0;
   while (true) {
-    const res = await fetch(`${supbase_URL}/storage/v1/object/list/${encodeURIComponent(ORIGINALS_BUCKET)}`, {
+    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/list/${encodeURIComponent(ORIGINALS_BUCKET)}`, {
       method: 'POST',
-      headers: supbaseHeaders(),
+      headers: supabaseHeaders(),
       body: JSON.stringify({
         prefix,
         limit: PAGE_SIZE,
@@ -141,7 +141,7 @@ async function listFolder(prefix) {
 
 function downloadToFile(objectPath, destPath) {
   return new Promise((resolve, reject) => {
-    const url = `${supbase_URL}/storage/v1/object/${encodeURIComponent(ORIGINALS_BUCKET)}/${objectPath}`;
+    const url = `${SUPABASE_URL}/storage/v1/object/${encodeURIComponent(ORIGINALS_BUCKET)}/${objectPath}`;
     https.get(url, { headers: { apikey: SERVICE_ROLE_KEY, Authorization: `Bearer ${SERVICE_ROLE_KEY}` } }, (res) => {
       if (res.statusCode !== 200) {
         reject(new Error(`HTTP ${res.statusCode} downloading ${objectPath}`));
