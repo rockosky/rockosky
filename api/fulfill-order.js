@@ -46,6 +46,7 @@ const nodemailer = require('nodemailer');
 const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
 const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
 const ORIGINALS_BUCKET = "Ketchup Files ORIGINALS";
+const PUBLIC_BUCKET = "Ketchup Files UPLOADS"; // watermarked copy -- safe to show as an email preview image
 const SIGNED_URL_EXPIRY_SECONDS = 60 * 60 * 72; // 72 hours
 
 module.exports = async (req, res) => {
@@ -102,7 +103,7 @@ module.exports = async (req, res) => {
 
     const orFilter = productIds.map(id => `squarespace_product_id.eq.${id}`).join(',');
     const photosRes = await fetch(
-      `${supbase_URL}/rest/v1/photos?or=(${orFilter})&select=id,title,original_file_path,squarespace_product_id`,
+      `${supbase_URL}/rest/v1/photos?or=(${orFilter})&select=id,title,file_path,original_file_path,squarespace_product_id`,
       { headers: supbaseHeaders() }
     );
     const photos = await photosRes.json();
@@ -120,7 +121,15 @@ module.exports = async (req, res) => {
         continue;
       }
       const signedUrl = await createSignedUrl(photo.original_file_path);
-      if (signedUrl) links.push({ title: photo.title || 'Your photo', url: signedUrl });
+      // The watermarked copy is public by design (it's the one shown on
+      // the storefront) -- safe to embed directly as a preview image in
+      // the receipt so the buyer can actually see what they bought,
+      // right next to the button that downloads the real un-watermarked
+      // file. No signing needed for this one, it's already public.
+      const previewUrl = photo.file_path
+        ? `${supbase_URL}/storage/v1/object/public/${encodeURIComponent(PUBLIC_BUCKET)}/${photo.file_path}`
+        : null;
+      if (signedUrl) links.push({ title: photo.title || 'Your photo', url: signedUrl, previewUrl: previewUrl });
       else missing.push(photo.title || photo.id);
     }
 
@@ -192,23 +201,77 @@ async function sendDeliveryEmail(toEmail, links, missing) {
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
   });
 
-  const linksHtml = links.map(l => `<p><strong>${l.title}</strong><br><a href="${l.url}">Download full-resolution file</a></p>`).join('');
+  // Branded to match the rest of Ketchup Files (black, red accent, serif
+  // headline / mono details) instead of the generic default email. Kept
+  // to table/inline-style basics rather than webfonts or flex/grid --
+  // most email clients (Outlook especially) strip external stylesheets
+  // and don't support modern CSS layout, so this uses the same safe
+  // subset real marketing emails rely on.
+  const linkRows = links.map(l => `
+    <tr>
+      <td style="padding:18px 0; border-top:1px solid #262626;">
+        ${l.previewUrl ? `<img src="${l.previewUrl}" alt="${l.title}" width="220" style="display:block; width:220px; max-width:100%; height:auto; border-radius:2px; margin-bottom:14px; border:1px solid #262626;">` : ''}
+        <div style="font-family:Georgia, 'Times New Roman', serif; font-size:16px; color:#ffffff; margin-bottom:10px;">${l.title}</div>
+        <a href="${l.url}" style="display:inline-block; background:#e2231a; color:#ffffff; text-decoration:none; font-family:Arial, sans-serif; font-size:11px; letter-spacing:1px; text-transform:uppercase; font-weight:bold; padding:11px 20px; border-radius:999px;">Download Full-Resolution File</a>
+      </td>
+    </tr>
+  `).join('');
+
   const missingHtml = missing.length
-    ? `<p style="color:#999;">Note: ${missing.length} item(s) from this order aren't ready for delivery yet — Ketchup Files will follow up separately.</p>`
+    ? `<tr><td style="padding-top:16px;"><p style="font-family:Arial, sans-serif; color:#8a8a8a; font-size:12px; line-height:1.6; margin:0;">Note: ${missing.length} item(s) from this order aren't ready for delivery yet — Ketchup Files will follow up separately.</p></td></tr>`
     : '';
+
+  const expiryNote = `Download link${links.length > 1 ? 's expire' : ' expires'} in 72 hours — save your file${links.length > 1 ? 's' : ''} somewhere safe once downloaded.`;
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<body style="margin:0; padding:0; background:#0a0a0a;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0a0a0a;">
+    <tr>
+      <td align="center" style="padding:40px 20px;">
+        <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px; width:100%; background:#0a0a0a; border:1px solid #262626; border-radius:6px;">
+          <tr>
+            <td style="padding:36px 32px 28px; border-bottom:1px solid #262626;">
+              <div style="font-family:Georgia, 'Times New Roman', serif; font-weight:bold; font-size:26px; color:#ffffff; letter-spacing:.5px;">Ketchup Files</div>
+              <div style="font-family:Arial, sans-serif; font-size:10px; letter-spacing:2px; text-transform:uppercase; color:#e2231a; margin-top:6px;">Order Confirmed</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px 32px 8px;">
+              <p style="font-family:Arial, sans-serif; color:#e8e8e8; font-size:14px; line-height:1.6; margin:0 0 8px;">Thanks for your purchase from Ketchup Files. Your file${links.length > 1 ? 's are' : ' is'} ready below.</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 32px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                ${linkRows}
+                ${missingHtml}
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:24px 32px 32px;">
+              <p style="font-family:Arial, sans-serif; color:#5c5c5c; font-size:11px; line-height:1.6; margin:0;">${expiryNote}</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:18px 32px; border-top:1px solid #1a1a1a; background:#050505;">
+              <p style="font-family:Arial, sans-serif; color:#5c5c5c; font-size:10px; letter-spacing:1px; text-transform:uppercase; margin:0;">Ketchup Files &middot; ketchupfiles.com</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
 
   await transporter.sendMail({
     from: process.env.SMTP_FROM,
     to: toEmail,
     subject: 'Your Ketchup Files photo is ready to download',
-    html: `
-      <div style="font-family: Arial, sans-serif;">
-        <p>Thanks for your purchase from Ketchup Files.</p>
-        ${linksHtml}
-        ${missingHtml}
-        <p style="color:#999; font-size:12px;">Download link${links.length > 1 ? 's expire' : ' expires'} in 72 hours.</p>
-      </div>
-    `
+    html
   });
 }
 
