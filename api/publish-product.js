@@ -217,6 +217,15 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     // says otherwise.
     name: buyPrefix + title + ' (Digital Download)',
     description: fullDescription,
+    // SEO fields were never being sent at all -- Squarespace's product
+    // SEO panel was sitting empty every time, not because of any error,
+    // just because nothing populated it. Reusing the same real title
+    // and description the contributor already typed, rather than
+    // inventing separate SEO copy -- truncated to Squarespace's own
+    // displayed limits (100 / 400 characters) so a long caption doesn't
+    // get silently rejected or cut off oddly by their API.
+    seoTitle: (buyPrefix + title).slice(0, 100),
+    seoDescription: fullDescription.slice(0, 400),
     isVisible: true,
     tags: [city, season, 'Ketchup Files'].concat(hashtagList),
     variants: [
