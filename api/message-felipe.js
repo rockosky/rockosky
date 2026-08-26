@@ -1,4 +1,18 @@
-
+// /api/message-felipe.js
+//
+// Backs the ultra-simple message-felipe.html page. Takes a message and
+// emails it straight to Felipe, with reply-to set to the sender's real
+// email -- so Felipe hitting "Reply" in his normal email client sends
+// the response directly to them, no app, no login, nothing new to learn
+// on their end. This is intentionally the smallest possible thing that
+// could work for someone who doesn't want to learn a new system.
+//
+// ============================================================
+// ONE-TIME SETUP:
+// Uses the same SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS / SMTP_FROM
+// environment variables already set up for fulfill-order.js -- no new
+// env vars needed if that's already deployed.
+// ============================================================
 
 const nodemailer = require('nodemailer');
 
