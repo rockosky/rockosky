@@ -28,6 +28,16 @@ SETUP (one-time)
 import os
 import sys
 import csv
+
+# Verified real video IDs, pulled directly from Interfaz Studio's
+# KF_HEADER_PLAYLIST array -- these are confirmed accurate, not guessed
+# or pattern-matched.
+HEADER_PLAYLIST_VIDEO_IDS = [
+    "2CeCnkKy-SU", "TyZET53FzwQ", "_Uq5fHsQVmA", "eEXkoA470rg", "6wOl1wIkd_Y",
+    "vRUBOryZUGY", "O1CN2J9doXk", "n4rzc1hhp38", "2C-aJHOLogQ", "vMj0k7l7L7Y",
+    "ohUA0APh_ys", "3giPsb_mkQ0", "KHA1eSMygSA", "PS6oL2-2jNk", "MACnwJNtxx0",
+]
+
 from collections import Counter
 from datetime import datetime
 
@@ -111,6 +121,15 @@ def build_report(rows):
     lines.append("TOP 25 TRENDING HASHTAGS")
     for tag, count in all_hashtags.most_common(25):
         lines.append(f"  #{tag}: {count}")
+    lines.append("")
+
+    lines.append("SITE HEADER VIDEO PLAYLIST (Interfaz Studio)")
+    lines.append("  These 15 real YouTube video IDs rotate in the site header.")
+    lines.append("  (The larger ~1,530-video Video Archive is not included here --")
+    lines.append("  it's not reliably extractable without risking mixed-in garbage")
+    lines.append("  data, so it's left out rather than guessed at.)")
+    for vid in HEADER_PLAYLIST_VIDEO_IDS:
+        lines.append(f"  https://www.youtube.com/watch?v={vid}")
     lines.append("")
 
     return "\n".join(lines)
