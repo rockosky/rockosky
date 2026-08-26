@@ -9,7 +9,7 @@
 // ============================================================
 // ONE-TIME SETUP NEEDED (none of this is automatic yet):
 //
-// 1. Create a PRIVATE supbase Storage bucket named exactly
+// 1. Create a PRIVATE Supabase Storage bucket named exactly
 //    "Ketchup Files ORIGINALS" (public access OFF — this is the whole
 //    point, it should never be reachable except via a signed URL this
 //    endpoint generates). The uploader now writes the clean original
@@ -43,8 +43,8 @@ const nodemailer = require('nodemailer');
 // SUPBASE_URL / SUPBASE_SERVICE_ROLE_KEY (no "A") -- reading both
 // spellings here so this works regardless, and matches the fix
 // already applied to publish-product.js.
-const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
-const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
+const SUPABASE_URL = process.env.SUPBASE_URL || process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
 const ORIGINALS_BUCKET = "Ketchup Files ORIGINALS";
 const PUBLIC_BUCKET = "Ketchup Files UPLOADS"; // watermarked copy -- safe to show as an email preview image
 const SIGNED_URL_EXPIRY_SECONDS = 60 * 60 * 72; // 72 hours
@@ -56,8 +56,8 @@ module.exports = async (req, res) => {
   }
 
   const missingEnvVars = [];
-  if (!supbase_URL) missingEnvVars.push('SUPBASE_URL');
-  if (!supbase_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
+  if (!SUPABASE_URL) missingEnvVars.push('SUPBASE_URL');
+  if (!SUPABASE_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
   if (!process.env.SMTP_HOST) missingEnvVars.push('SMTP_HOST');
   if (!process.env.SMTP_USER) missingEnvVars.push('SMTP_USER');
   if (!process.env.SMTP_PASS) missingEnvVars.push('SMTP_PASS');
@@ -87,8 +87,8 @@ module.exports = async (req, res) => {
 
     // Avoid double-sending if Squarespace retries the same webhook.
     const already = await fetch(
-      `${supbase_URL}/rest/v1/order_deliveries?squarespace_order_id=eq.${encodeURIComponent(orderId)}&select=id`,
-      { headers: supbaseHeaders() }
+      `${SUPABASE_URL}/rest/v1/order_deliveries?squarespace_order_id=eq.${encodeURIComponent(orderId)}&select=id`,
+      { headers: supabaseHeaders() }
     ).then(r => r.json());
     if (already && already.length) {
       res.status(200).json({ ok: true, skipped: 'Already delivered for this order' });
@@ -103,8 +103,8 @@ module.exports = async (req, res) => {
 
     const orFilter = productIds.map(id => `squarespace_product_id.eq.${id}`).join(',');
     const photosRes = await fetch(
-      `${supbase_URL}/rest/v1/photos?or=(${orFilter})&select=id,title,file_path,original_file_path,squarespace_product_id`,
-      { headers: supbaseHeaders() }
+      `${SUPABASE_URL}/rest/v1/photos?or=(${orFilter})&select=id,title,file_path,original_file_path,squarespace_product_id`,
+      { headers: supabaseHeaders() }
     );
     const photos = await photosRes.json();
 
@@ -127,10 +127,22 @@ module.exports = async (req, res) => {
       // right next to the button that downloads the real un-watermarked
       // file. No signing needed for this one, it's already public.
       const previewUrl = photo.file_path
-        ? `${supbase_URL}/storage/v1/object/public/${encodeURIComponent(PUBLIC_BUCKET)}/${photo.file_path}`
+        ? `${SUPABASE_URL}/storage/v1/object/public/${encodeURIComponent(PUBLIC_BUCKET)}/${photo.file_path}`
         : null;
-      if (signedUrl) links.push({ title: photo.title || 'Your photo', url: signedUrl, previewUrl: previewUrl });
-      else missing.push(photo.title || photo.id);
+      if (signedUrl) {
+        // Without this, clicking the link just opens the image inline in
+        // a new browser tab for most image types -- the buyer would have
+        // to know to right-click -> Save As, which isn't a real "download"
+        // experience. Supabase Storage forces a true file download (a
+        // real Content-Disposition: attachment response) when a `download`
+        // parameter is present on the object URL -- appending it here,
+        // with a clean filename built from the photo title.
+        const safeFilename = sanitizeFilename(photo.title || 'ketchup-files-photo') + guessExtension(photo.original_file_path);
+        const downloadUrl = signedUrl + (signedUrl.includes('?') ? '&' : '?') + 'download=' + encodeURIComponent(safeFilename);
+        links.push({ title: photo.title || 'Your photo', url: downloadUrl, previewUrl: previewUrl });
+      } else {
+        missing.push(photo.title || photo.id);
+      }
     }
 
     if (links.length) {
@@ -139,9 +151,9 @@ module.exports = async (req, res) => {
 
     // Record what happened either way, so missing-original cases are
     // visible somewhere instead of just silently not sending anything.
-    await fetch(`${supbase_URL}/rest/v1/order_deliveries`, {
+    await fetch(`${SUPABASE_URL}/rest/v1/order_deliveries`, {
       method: 'POST',
-      headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      headers: { ...supabaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
       body: JSON.stringify({
         squarespace_order_id: orderId,
         customer_email: buyerEmail,
@@ -175,19 +187,37 @@ function extractOrder(body) {
   };
 }
 
+// A clean, safe filename for the forced download -- strips anything
+// that could break a Content-Disposition header or look wrong in a
+// download folder (slashes, quotes, control characters).
+function sanitizeFilename(name) {
+  return String(name)
+    .replace(/[\/\\?%*:|"<>]/g, '')
+    .trim()
+    .slice(0, 120) || 'ketchup-files-photo';
+}
+
+// The original file's own extension (from its storage path) is the
+// correct one to keep -- guessing from the watermarked copy or
+// hardcoding .jpg would be wrong for video uploads.
+function guessExtension(storagePath) {
+  var match = /\.[a-zA-Z0-9]+$/.exec(storagePath || '');
+  return match ? match[0] : '';
+}
+
 async function createSignedUrl(path) {
   try {
     const res = await fetch(
-      `${supbase_URL}/storage/v1/object/sign/${encodeURIComponent(ORIGINALS_BUCKET)}/${path}`,
+      `${SUPABASE_URL}/storage/v1/object/sign/${encodeURIComponent(ORIGINALS_BUCKET)}/${path}`,
       {
         method: 'POST',
-        headers: { ...supbaseHeaders(), 'Content-Type': 'application/json' },
+        headers: { ...supabaseHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ expiresIn: SIGNED_URL_EXPIRY_SECONDS })
       }
     );
     if (!res.ok) return null;
     const data = await res.json();
-    return data.signedURL ? `${supbase_URL}/storage/v1${data.signedURL}` : null;
+    return data.signedURL ? `${SUPABASE_URL}/storage/v1${data.signedURL}` : null;
   } catch (e) {
     return null;
   }
@@ -275,9 +305,9 @@ async function sendDeliveryEmail(toEmail, links, missing) {
   });
 }
 
-function supbaseHeaders() {
+function supabaseHeaders() {
   return {
-    apikey: supbase_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${supbase_SERVICE_ROLE_KEY}`
+    apikey: SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
   };
 }
