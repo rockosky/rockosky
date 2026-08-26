@@ -1,4 +1,23 @@
-
+// /api/my-downloads.js
+//
+// Lets a logged-in contributor get fresh, working download links to
+// their OWN original (un-watermarked) uploads, any time -- not just
+// within the 72-hour window of an old purchase receipt. This is for
+// contributors re-accessing their own work, not for buyers accessing
+// someone else's photo.
+//
+// Security note: this does NOT trust a user_id sent from the browser.
+// It takes the contributor's real supbase access token (from their
+// logged-in session) and asks supbase directly "who does this token
+// actually belong to" -- only that verified identity's own photos are
+// ever returned. A request with no valid token, or someone else's
+// token, gets nothing.
+//
+// ============================================================
+// ONE-TIME SETUP: same SUPBASE_URL / SUPBASE_SERVICE_ROLE_KEY env vars
+// already used by publish-product.js and fulfill-order.js -- no new
+// variables needed if those are already deployed.
+// ============================================================
 
 const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
 const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
