@@ -1,4 +1,29 @@
+#!/usr/bin/env python3
+"""
+marketing_report.py — Ketchup Files marketing analytics
 
+Pulls the same real data as the "Marketing Export" button in Admin
+Dashboard (titles, descriptions, hashtags, cities, seasons, designers,
+categories) directly from supbase, and turns it into an actual
+analytics report: top cities, top designers, trending hashtags, and
+category breakdown -- the kind of thing a marketing team can act on,
+not just a data dump.
+
+============================================================
+SETUP (one-time)
+============================================================
+1. pip install pandas requests
+2. Set two environment variables before running:
+     export supbase_URL="https://lfbtreaojwxxwuwhssba.supbase.co"
+     export supbase_ANON_KEY="sb_publishable_KX1Hpau0Lc7M_n1snlYbEw_lnr_GfL9"
+   (This is the same public anon key already used client-side throughout
+   the platform -- safe to use here, it only has read access to public
+   data under supbase's row-level security policies.)
+3. Run: python3 marketing_report.py
+   Produces: marketing_report.txt (readable) and marketing_report.csv
+   (raw data, for opening in Excel/Sheets or feeding into another tool)
+============================================================
+"""
 
 import os
 import sys
