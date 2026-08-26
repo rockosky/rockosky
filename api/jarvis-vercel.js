@@ -1,44 +1,4 @@
-// jarvis-vercel.js
-//
-// Jarvis's voice, on its own: real browser speech recognition (listening)
-// and real speech synthesis (speaking back) -- the same logic that runs
-// inside jarvis-network.html and the floating companion dot, pulled out
-// into one standalone file so it isn't locked inside either of those.
-//
-// Two honest platform limits, stated up front rather than discovered by
-// surprise:
-//   - Speech recognition needs microphone permission. If this runs inside
-//     an iframe, that iframe's tag needs allow="microphone" or the
-//     browser silently blocks it -- this was a real bug fixed elsewhere
-//     in Interfaz Studio this session, worth remembering if this file
-//     gets dropped into a new page.
-//   - Browser support varies: Chrome and Edge support both recognition
-//     and synthesis well; Safari's recognition support is inconsistent;
-//     Firefox doesn't support SpeechRecognition at all as of this
-//     writing. Every function below checks for support and reports
-//     status through a callback rather than failing silently.
-//
-// ============================================================
-// USAGE
-// ============================================================
-//   var jarvisVoice = createJarvisVoice({
-//     onStatus: function(text) { /* show it somewhere */ },
-//     onTranscript: function(text) { /* show what was just heard */ },
-//     onCommand: function(text) {
-//       // called with the raw recognized speech every time the person
-//       // finishes a sentence -- this file doesn't decide what a
-//       // command means, that's for whatever page is using it
-//     }
-//   });
-//
-//   jarvisVoice.startListening();   // begins continuous recognition
-//   jarvisVoice.stopListening();
-//   jarvisVoice.isListening();      // -> boolean
-//
-//   jarvisVoice.speak("Online and ready.");
-//   jarvisVoice.setSpeakingEnabled(false);  // mute without losing state
-//   jarvisVoice.isSpeakingEnabled();        // -> boolean
-// ============================================================
+
 
 function createJarvisVoice(options) {
   options = options || {};
