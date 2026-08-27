@@ -20,6 +20,7 @@ const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
 const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
 const SQUARESPACE_API_KEY = process.env.SQUARESPACE_API_KEY;
 const BUCKET = "Ketchup Files UPLOADS";
+const ADMIN_EMAIL = "creators@ketchupfiles.com";
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -44,7 +45,37 @@ module.exports = async (req, res) => {
     return;
   }
 
-  const { photo_id, product_type, auto } = req.body || {};
+  // Previously this endpoint did the real approve-and-publish action for
+  // ANY caller who knew the URL, with nothing checking who was actually
+  // asking -- the header comment above always said "called by the admin
+  // dashboard," but nothing ever actually enforced that server-side, so
+  // that was only ever a UI convention, not real protection. Verified
+  // here now, same pattern as approve-chat.js: resolve the caller's real
+  // identity from their own token and reject anyone who isn't admin,
+  // before touching anything.
+  const { photo_id, product_type, auto, adminAccessToken } = req.body || {};
+  if (!adminAccessToken) {
+    res.status(401).json({ error: 'adminAccessToken is required' });
+    return;
+  }
+  try {
+    const callerRes = await fetch(`${supbase_URL}/auth/v1/user`, {
+      headers: { apikey: supbase_SERVICE_ROLE_KEY, Authorization: `Bearer ${adminAccessToken}` }
+    });
+    if (!callerRes.ok) {
+      res.status(401).json({ error: 'Not logged in, or session expired.' });
+      return;
+    }
+    const caller = await callerRes.json();
+    if (!caller || !caller.email || caller.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+      res.status(403).json({ error: 'Only the admin account can approve and publish.' });
+      return;
+    }
+  } catch (err) {
+    res.status(500).json({ error: 'Could not verify admin identity.' });
+    return;
+  }
+
   if (!photo_id) {
     res.status(400).json({ error: 'photo_id is required' });
     return;
