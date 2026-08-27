@@ -43,11 +43,13 @@ module.exports = async (req, res) => {
 
   // Basic abuse guard: cap message count and total length server-side so
   // this endpoint can't be used as a free, unmetered proxy to the
-  // Anthropic API by anyone who finds the URL. Adjust these caps if
-  // legitimate conversations are getting cut off.
-  const trimmedMessages = messages.slice(-16);
+  // Anthropic API by anyone who finds the URL. Raised from the original
+  // 16 messages / 20,000 chars / 600 max_tokens -- that combination was
+  // making real conversations feel like they forgot things and cut
+  // replies short. Still bounded, just with real headroom now.
+  const trimmedMessages = messages.slice(-40);
   const totalChars = trimmedMessages.reduce((sum, m) => sum + (typeof m.content === 'string' ? m.content.length : 0), 0);
-  if (totalChars > 20000) {
+  if (totalChars > 60000) {
     res.status(400).json({ error: 'Conversation too long for this endpoint.' });
     return;
   }
@@ -62,7 +64,7 @@ module.exports = async (req, res) => {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 600,
+        max_tokens: 1500,
         system: typeof system === 'string' ? system : undefined,
         messages: trimmedMessages
       })
