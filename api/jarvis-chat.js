@@ -1,174 +1,81 @@
-// jarvis-verbal.js
+// /api/jarvis-chat.js
 //
-// Jarvis's voice, on its own: real browser speech recognition (listening)
-// and real speech synthesis (speaking back) -- the same logic that runs
-// inside jarvis-network.html and the floating companion dot, pulled out
-// into one standalone file so it isn't locked inside either of those.
+// Proxies conversation requests from the Jarvis widgets (the floating
+// companion dot, and the full Jarvis Network view in Interfaz Studio) to
+// the real Anthropic API. This exists ONLY because a browser cannot call
+// api.anthropic.com directly with no key and expect a response -- the key
+// has to live somewhere that isn't shipped to every visitor's browser.
+// This function holds it as a Vercel environment variable instead.
 //
-// Two honest platform limits, stated up front rather than discovered by
-// surprise:
-//   - Speech recognition needs microphone permission. If this runs inside
-//     an iframe, that iframe's tag needs allow="microphone" or the
-//     browser silently blocks it -- this was a real bug fixed elsewhere
-//     in Interfaz Studio this session, worth remembering if this file
-//     gets dropped into a new page.
-//   - Browser support varies: Chrome and Edge support both recognition
-//     and synthesis well; Safari's recognition support is inconsistent;
-//     Firefox doesn't support SpeechRecognition at all as of this
-//     writing. Every function below checks for support and reports
-//     status through a callback rather than failing silently.
-//
-// ============================================================
-// USAGE
-// ============================================================
-//   var jarvisVoice = createJarvisVoice({
-//     onStatus: function(text) { /* show it somewhere */ },
-//     onTranscript: function(text) { /* show what was just heard */ },
-//     onCommand: function(text) {
-//       // called with the raw recognized speech every time the person
-//       // finishes a sentence -- this file doesn't decide what a
-//       // command means, that's for whatever page is using it
-//     }
-//   });
-//
-//   jarvisVoice.startListening();   // begins continuous recognition
-//   jarvisVoice.stopListening();
-//   jarvisVoice.isListening();      // -> boolean
-//
-//   jarvisVoice.speak("Online and ready.");
-//   jarvisVoice.setSpeakingEnabled(false);  // mute without losing state
-//   jarvisVoice.isSpeakingEnabled();        // -> boolean
-// ============================================================
+// Deploy this alongside your other /api functions (same project as
+// publish-product.js), then set an Anthropic API key as an environment
+// variable named ANTHROPIC_API_KEY in the Vercel project settings.
+// Get a key at https://console.anthropic.com/settings/keys -- note this
+// is a paid API, billed per request, separate from any Claude.ai
+// subscription.
 
-function createJarvisVoice(options) {
-  options = options || {};
-  var onStatus = typeof options.onStatus === 'function' ? options.onStatus : function(){};
-  var onTranscript = typeof options.onTranscript === 'function' ? options.onTranscript : function(){};
-  var onCommand = typeof options.onCommand === 'function' ? options.onCommand : function(){};
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
-  var SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
-  var recognizer = null;
-  var listening = false;
-  var speakingEnabled = options.speakingEnabled !== false; // on by default
+module.exports = async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  // ---- Speak (text-to-speech) ----
-  function speak(text) {
-    if (!speakingEnabled) return;
-    if (!('speechSynthesis' in window)) {
-      onStatus('Speech output not supported in this browser.');
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
+
+  if (!ANTHROPIC_API_KEY) {
+    res.status(500).json({ error: 'Missing Vercel environment variable: ANTHROPIC_API_KEY. Set it in your Vercel project settings, then redeploy.' });
+    return;
+  }
+
+  const { system, messages } = req.body || {};
+  if (!Array.isArray(messages) || !messages.length) {
+    res.status(400).json({ error: 'messages array is required' });
+    return;
+  }
+
+  // Basic abuse guard: cap message count and total length server-side so
+  // this endpoint can't be used as a free, unmetered proxy to the
+  // Anthropic API by anyone who finds the URL. Adjust these caps if
+  // legitimate conversations are getting cut off.
+  const trimmedMessages = messages.slice(-16);
+  const totalChars = trimmedMessages.reduce((sum, m) => sum + (typeof m.content === 'string' ? m.content.length : 0), 0);
+  if (totalChars > 20000) {
+    res.status(400).json({ error: 'Conversation too long for this endpoint.' });
+    return;
+  }
+
+  try {
+    const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 600,
+        system: typeof system === 'string' ? system : undefined,
+        messages: trimmedMessages
+      })
+    });
+
+    const data = await anthropicRes.json();
+    if (!anthropicRes.ok) {
+      res.status(anthropicRes.status).json({ error: (data && data.error && data.error.message) || 'Anthropic API error' });
       return;
     }
-    try {
-      window.speechSynthesis.cancel(); // don't let replies pile up and queue
-      var utter = new SpeechSynthesisUtterance(text);
-      utter.rate = options.rate || 1.02;
-      utter.pitch = options.pitch || 0.85;
-      if (options.voiceName) {
-        var match = window.speechSynthesis.getVoices().find(function(v){ return v.name === options.voiceName; });
-        if (match) utter.voice = match;
-      }
-      window.speechSynthesis.speak(utter);
-    } catch (e) {
-      onStatus('Speech output failed: ' + (e && e.message ? e.message : 'unknown error'));
-    }
+
+    res.status(200).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Proxy request failed' });
   }
-
-  function setSpeakingEnabled(on) {
-    speakingEnabled = !!on;
-    if (!speakingEnabled && 'speechSynthesis' in window) {
-      try { window.speechSynthesis.cancel(); } catch (e) {}
-    }
-  }
-
-  function isSpeakingEnabled() { return speakingEnabled; }
-
-  // ---- Listen (speech-to-text) ----
-  function ensureRecognizer() {
-    if (recognizer) return recognizer;
-    recognizer = new SpeechRecognitionAPI();
-    recognizer.continuous = true;
-    recognizer.interimResults = false;
-    recognizer.lang = options.lang || 'en-US';
-
-    recognizer.onresult = function(e) {
-      var last = e.results[e.results.length - 1];
-      if (!last.isFinal) return;
-      var transcript = last[0].transcript;
-      onTranscript(transcript);
-      onCommand(transcript);
-    };
-
-    recognizer.onerror = function(e) {
-      onStatus('Voice error: ' + e.error);
-      // "no-speech" and "aborted" are routine (silence, or a deliberate
-      // stop) -- not worth surfacing as a failure the way a real
-      // permission or hardware error is.
-    };
-
-    recognizer.onend = function() {
-      // Browsers auto-stop recognition after a period of silence even in
-      // continuous mode -- restart automatically if the caller hasn't
-      // explicitly stopped it, so this behaves like a real always-on
-      // listener instead of a one-shot that quietly dies.
-      if (listening) {
-        try { recognizer.start(); } catch (e) { /* already running */ }
-      }
-    };
-
-    return recognizer;
-  }
-
-  function startListening() {
-    if (!SpeechRecognitionAPI) {
-      onStatus('Voice recognition not supported in this browser.');
-      return false;
-    }
-    listening = true;
-    ensureRecognizer();
-    try {
-      recognizer.start();
-      onStatus('Listening…');
-      return true;
-    } catch (e) {
-      // Most common real cause: already started, or mic permission
-      // denied/blocked (including the iframe-permission-policy case
-      // described at the top of this file).
-      onStatus('Could not start listening: ' + (e && e.message ? e.message : 'unknown error'));
-      return false;
-    }
-  }
-
-  function stopListening() {
-    listening = false;
-    if (recognizer) {
-      try { recognizer.stop(); } catch (e) {}
-    }
-    onStatus('Stopped.');
-  }
-
-  function isListening() { return listening; }
-
-  function isSupported() {
-    return {
-      recognition: !!SpeechRecognitionAPI,
-      synthesis: 'speechSynthesis' in window
-    };
-  }
-
-  return {
-    startListening: startListening,
-    stopListening: stopListening,
-    isListening: isListening,
-    speak: speak,
-    setSpeakingEnabled: setSpeakingEnabled,
-    isSpeakingEnabled: isSpeakingEnabled,
-    isSupported: isSupported
-  };
-}
-
-// Exposes both as a global (drop-in <script> tag usage) and as a CommonJS
-// export (if this ever gets bundled) -- covers both ways this might
-// actually get used without assuming either.
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { createJarvisVoice: createJarvisVoice };
-}
+};
