@@ -1,4 +1,22 @@
-
+// /api/approve-chat.js
+//
+// Approves a user for community chat. Built as a server function
+// specifically because the client-side version (admin's browser
+// directly updating creator_profiles) depends on Row-Level Security
+// being configured to let the admin's account write to *other* users'
+// rows -- that's a much less commonly-granted permission than "read/
+// write your own row," and if it's missing, the update silently fails:
+// the admin's UI looks like it worked (the row disappears from the
+// pending list), but the database was never actually changed, so the
+// same person shows up as pending again next time, and never actually
+// gets into chat. This endpoint sidesteps that entirely by using the
+// service role key, which bypasses RLS by design -- the fix doesn't
+// depend on getting a policy right, it just works.
+//
+// ============================================================
+// ONE-TIME SETUP: same SUPBASE_URL / SUPBASE_SERVICE_ROLE_KEY env vars
+// already used by the other functions -- no new variables needed.
+// ============================================================
 
 const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
 const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
