@@ -50,7 +50,7 @@ module.exports = async (req, res) => {
 
     if (action === 'list') {
       const listRes = await fetch(
-        `${supbase_URL}/rest/v1/photos?status=eq.pending&select=id,title,city,season,price_cents,file_path,created_at&order=created_at.asc&limit=50`,
+        `${supbase_URL}/rest/v1/photos?status=eq.pending&select=id,title,city,season,price_cents,file_path,device_type,created_at&order=created_at.asc&limit=50`,
         { headers: serviceHeaders() }
       );
       if (!listRes.ok) {
