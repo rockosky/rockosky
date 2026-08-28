@@ -207,10 +207,25 @@ async function getOrCreateStorePage(city, season) {
     existing = pages.find((p) => p && p.title && p.title.toLowerCase().includes(cityLower));
   }
 
+  // Final fallback: a general catch-all page for submissions that don't
+  // match any specific curated event (e.g. a regular street photo from
+  // a city/neighborhood that isn't one of the named fashion weeks).
+  // Matched by the word "contributor" appearing in the page title --
+  // this requires actually creating that Squarespace Store Page
+  // yourself first (Commerce settings), since this code can only match
+  // against pages that already exist, not create new ones. Name it
+  // something containing "contributor", e.g. "Contributors Store" or
+  // "Contributor Submissions".
+  if (!existing) {
+    existing = pages.find((p) => p && p.title && p.title.toLowerCase().includes('contributor'));
+  }
+
   if (existing && existing.id) return existing.id;
 
   throw new Error(
-    `No store page found containing both "${city}" and "${season}" in its name. ` +
+    `No store page found containing both "${city}" and "${season}" in its name, and no fallback ` +
+    `"Contributors" page exists either (create one in Squarespace Commerce settings with "contributor" ` +
+    `in its title to fix this permanently). ` +
     `Available page names: ${pages.map(p => p && p.title).filter(Boolean).join(', ') || '(none found)'}. ` +
     `RAW RESPONSE (to diagnose the actual shape): ${JSON.stringify(list).substring(0, 800)}`
   );
