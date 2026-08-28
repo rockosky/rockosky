@@ -1,81 +1,137 @@
 
 
-import { createClient } from '@supabase/supabase-js';
+const SUPABASE_URL = process.env.SUPBASE_URL || process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+const ORIGINALS_BUCKET = "Ketchup Files ORIGINALS";
+const SIGNED_URL_EXPIRY_SECONDS = 60 * 60 * 72; // 72 hours -- matches fulfill-order.js's own expiry
 
-const supabase = createClient(
-  process.env.supbase_URL,
-  process.env.supbase_SERVICE_ROLE_KEY
-);
+module.exports = async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  if (req.method === 'OPTIONS') { res.status(204).end(); return; }
+  if (req.method !== 'GET') { res.status(405).json({ error: 'Method not allowed' }); return; }
 
-const PRIVATE_BUCKET = 'kf-originals-private';
-const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
-
-export default async function handler(req, res) {
-  const { orderId } = req.query;
-  if (!orderId) return res.status(400).json({ ok: false, error: 'missing orderId' });
-
-  const { data: delivery, error } = await supabase
-    .from('order_deliveries')
-    .select('*, photos(original_storage_path, watermark_storage_path, title)')
-    .eq('order_id', orderId)
-    .maybeSingle();
-
-  if (error || !delivery) {
-    return res.status(404).json({ ok: false, error: 'order not found' });
+  const missingEnvVars = [];
+  if (!SUPABASE_URL) missingEnvVars.push('SUPBASE_URL');
+  if (!SUPABASE_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
+  if (missingEnvVars.length) {
+    res.status(500).json({ error: `Missing Vercel environment variable(s): ${missingEnvVars.join(', ')}` });
+    return;
   }
 
-  const expired =
-    !delivery.download_expires_at || new Date(delivery.download_expires_at) < new Date();
+  const orderId = req.query.orderId;
+  if (!orderId) { res.status(400).json({ error: 'orderId is required' }); return; }
 
-  let downloadUrl = delivery.download_url;
+  try {
+    const fulfillmentsRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/order_fulfillments?squarespace_order_id=eq.${encodeURIComponent(orderId)}&select=photo_id`,
+      { headers: supabaseHeaders() }
+    );
+    const fulfillments = await fulfillmentsRes.json();
 
-  if (expired) {
-    const { data: signed, error: signErr } = await supabase.storage
-      .from(PRIVATE_BUCKET)
-      .createSignedUrl(delivery.photos.original_storage_path, SIGNED_URL_TTL_SECONDS);
-    if (signErr) return res.status(500).json({ ok: false, error: signErr.message });
+    if (!fulfillments || !fulfillments.length) {
+      res.status(404).json({ ok: false, error: 'No order found with that id, or it hasn\u2019t been fulfilled yet.' });
+      return;
+    }
 
-    downloadUrl = signed.signedUrl;
-    await supabase
-      .from('order_deliveries')
-      .update({
-        download_url: downloadUrl,
-        download_expires_at: new Date(Date.now() + SIGNED_URL_TTL_SECONDS * 1000).toISOString(),
-      })
-      .eq('order_id', orderId);
+    const photoIds = fulfillments.map(f => f.photo_id).filter(Boolean);
+    if (!photoIds.length) {
+      res.status(404).json({ ok: false, error: 'Order found, but nothing to deliver for it.' });
+      return;
+    }
+
+    const orFilter = photoIds.map(id => `id.eq.${id}`).join(',');
+    const photosRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/photos?or=(${orFilter})&select=id,title,original_file_path`,
+      { headers: supabaseHeaders() }
+    );
+    const photos = await photosRes.json();
+
+    const items = [];
+    for (const photo of photos) {
+      if (!photo.original_file_path) {
+        items.push({ title: photo.title || 'Untitled', ready: false });
+        continue;
+      }
+      const signedUrl = await createSignedUrl(photo.original_file_path);
+      if (!signedUrl) {
+        items.push({ title: photo.title || 'Untitled', ready: false });
+        continue;
+      }
+      const safeFilename = sanitizeFilename(photo.title || 'ketchup-files-photo') + guessExtension(photo.original_file_path);
+      const downloadUrl = signedUrl + (signedUrl.includes('?') ? '&' : '?') + 'download=' + encodeURIComponent(safeFilename);
+      items.push({ title: photo.title || 'Untitled', ready: true, downloadUrl });
+    }
+
+    res.status(200).json({ ok: true, items });
+  } catch (err) {
+    console.error('get-order-download failed:', err);
+    res.status(500).json({ ok: false, error: 'Could not load your download. Try again in a moment.' });
   }
+};
 
-  const { data: pub } = supabase.storage
-    .from('kf-public')
-    .getPublicUrl(delivery.photos.watermark_storage_path);
+async function createSignedUrl(path) {
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/storage/v1/object/sign/${encodeURIComponent(ORIGINALS_BUCKET)}/${path}`,
+      {
+        method: 'POST',
+        headers: { ...supabaseHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expiresIn: SIGNED_URL_EXPIRY_SECONDS })
+      }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.signedURL ? `${SUPABASE_URL}/storage/v1${data.signedURL}` : null;
+  } catch (e) {
+    return null;
+  }
+}
 
-  return res.status(200).json({
-    ok: true,
-    title: delivery.photos.title,
-    downloadUrl,          // original, full-res, signed
-    watermarkUrl: pub.publicUrl, // watermarked preview, public
-  });
+function sanitizeFilename(name) {
+  return String(name).replace(/[\/\\?%*:|"<>]/g, '').trim().slice(0, 120) || 'ketchup-files-photo';
+}
+
+function guessExtension(storagePath) {
+  var match = /\.[a-zA-Z0-9]+$/.exec(storagePath || '');
+  return match ? match[0] : '';
+}
+
+function supabaseHeaders() {
+  return {
+    apikey: SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+  };
 }
 
 /* ------------------------------------------------------------------
-   Squarespace Code Block for a page at e.g.
+   Squarespace Code Block for a page at
    https://www.ketchupfiles.com/commerce/orders/[order-id]
    (create the page, set its URL slug, drop this in a Code Block)
 ------------------------------------------------------------------- */
 
 /*
-<div id="kf-download">Loading your download…</div>
+<div id="kf-order-download" style="font-family:Arial,sans-serif; max-width:480px; margin:40px auto;">Loading your download&#8230;</div>
 <script>
 (function () {
-  const orderId = window.location.pathname.split('/').pop();
-  fetch('https://vercel-publish-fawn.vercel.app/api/get-order-download?orderId=' + orderId)
-    .then(r => r.json())
-    .then(d => {
-      document.getElementById('kf-download').innerHTML = d.ok
-        ? '<a href="' + d.downloadUrl + '">Download "' + d.title + '" (original file)</a>'
-          + ' &nbsp;|&nbsp; '
-          + '<a href="' + d.watermarkUrl + '">Watermarked preview</a>'
-        : "We couldn't find that order.";
+  var orderId = window.location.pathname.split('/').pop();
+  fetch('https://rockosky.vercel.app/api/get-order-download?orderId=' + encodeURIComponent(orderId))
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var el = document.getElementById('kf-order-download');
+      if (!data.ok || !data.items || !data.items.length) {
+        el.textContent = data.error || "We couldn't find that order.";
+        return;
+      }
+      el.innerHTML = data.items.map(function (item) {
+        return item.ready
+          ? '<div style="margin-bottom:20px;"><div style="margin-bottom:8px;">' + item.title + '</div>' +
+            '<a href="' + item.downloadUrl + '" style="display:inline-block;background:#e2231a;color:#fff;text-decoration:none;padding:11px 20px;border-radius:999px;font-size:12px;letter-spacing:1px;text-transform:uppercase;font-weight:bold;">Download Full-Resolution File (No Watermark)</a></div>'
+          : '<div style="margin-bottom:20px;color:#888;">' + item.title + ' \u2014 not ready for delivery yet, we\u2019ll follow up separately.</div>';
+      }).join('');
+    })
+    .catch(function () {
+      document.getElementById('kf-order-download').textContent = 'Something went wrong loading your download. Try refreshing, or contact us.';
     });
 })();
 </script>
