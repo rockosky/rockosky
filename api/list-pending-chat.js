@@ -1,20 +1,4 @@
-// /api/list-pending-chat.js
-//
-// Companion to approve-chat.js, for the read side of the same problem.
-// The admin dashboard's Chat Approvals tab was querying creator_profiles
-// straight from the browser using the admin's own logged-in session --
-// which IS subject to Row-Level Security. If there's no policy letting
-// the admin's account read *other* users' rows (a much less commonly
-// granted permission than "read your own row"), that query silently
-// returns empty. The tab shows "Nobody waiting for approval" even when
-// someone genuinely is -- no error, just nothing to click Approve on.
-//
-// This endpoint sidesteps that the same way approve-chat.js already
-// sidesteps it for the write: service role key, bypasses RLS entirely.
-//
-// ============================================================
-// ONE-TIME SETUP: same SUPBASE_URL / SUPBASE_SERVICE_ROLE_KEY env vars
-// already used by every other function -- no new variables needed.
+ed.
 // ============================================================
 
 const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
