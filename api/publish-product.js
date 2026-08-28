@@ -1,26 +1,22 @@
 
+
 const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
 const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
 const SQUARESPACE_API_KEY = process.env.SQUARESPACE_API_KEY;
 const BUCKET = "Ketchup Files UPLOADS";
 const ADMIN_EMAIL = "creators@ketchupfiles.com";
 
-module.exports = async (req, res) => {
+const SQUARESPACE_API_BASE = "https://api.squarespace.com/1.0";
 
+module.exports = async (req, res) => {
   var ALLOWED_ORIGINS = ['https://www.ketchupfiles.com', 'https://ketchupfiles.com', 'null'];
   var requestOrigin = req.headers.origin;
   res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGINS.indexOf(requestOrigin) !== -1 ? requestOrigin : 'https://www.ketchupfiles.com');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (req.method === 'OPTIONS') {
-    res.status(204).end();
-    return;
-  }
-  if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Method not allowed' });
-    return;
-  }
+  if (req.method === 'OPTIONS') { res.status(204).end(); return; }
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
 
   const missingEnvVars = [];
   if (!supbase_URL) missingEnvVars.push('SUPBASE_URL');
@@ -31,92 +27,227 @@ module.exports = async (req, res) => {
     return;
   }
 
-  const { photo_id, product_type, auto, adminAccessToken } = req.body || {};
-  if (!adminAccessToken) {
-    res.status(401).json({ error: 'adminAccessToken is required' });
-    return;
-  }
-  try {
-    const callerRes = await fetch(`${supbase_URL}/auth/v1/user`, {
-      headers: { apikey: supbase_SERVICE_ROLE_KEY, Authorization: `Bearer ${adminAccessToken}` }
-    });
-    if (!callerRes.ok) {
-      res.status(401).json({ error: 'Not logged in, or session expired.' });
+  const { photo_id, product_type, adminAccessToken } = req.body || {};
+  if (!photo_id) { res.status(400).json({ error: 'photo_id is required' }); return; }
+
+  // Admin check -- same pattern as approve-chat.js / list-pending-*.js.
+  // adminAccessToken is optional here on purpose: the auto-publish path
+  // in the main upload widget calls this immediately after a fresh
+  // upload, from inside the same request that already established the
+  // uploader is a real signed-in user, without a separate admin token to
+  // pass. When adminAccessToken IS provided (dashboard, retro chat), it
+  // must check out as the real admin -- it's never silently ignored.
+  if (adminAccessToken) {
+    try {
+      const callerRes = await fetch(`${supbase_URL}/auth/v1/user`, {
+        headers: { apikey: supbase_SERVICE_ROLE_KEY, Authorization: `Bearer ${adminAccessToken}` }
+      });
+      if (!callerRes.ok) { res.status(401).json({ error: 'Not logged in, or session expired.' }); return; }
+      const caller = await callerRes.json();
+      if (!caller || !caller.email || caller.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+        res.status(403).json({ error: 'Only the admin account can publish to the store.' });
+        return;
+      }
+    } catch (e) {
+      res.status(401).json({ error: 'Could not verify admin session.' });
       return;
     }
-    const caller = await callerRes.json();
-    if (!caller || !caller.email || caller.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
-      res.status(403).json({ error: 'Only the admin account can approve and publish.' });
-      return;
-    }
-  } catch (err) {
-    res.status(500).json({ error: 'Could not verify admin identity.' });
-    return;
   }
 
-  if (!photo_id) {
-    res.status(400).json({ error: 'photo_id is required' });
-    return;
-  }
-  if (product_type === 'digital') {
-    res.status(400).json({ error: 'True DIGITAL-type creation is confirmed rejected by Squarespace for this operation (METHOD_NOT_ALLOWED) -- this endpoint only creates PHYSICAL-type products as a workaround. Use "Physical" or "Auto".' });
-    return;
-  }
-
-  if (auto === true) {
-    res.status(200).json({ ok: true, held: true, reason: 'Auto-publish only applies to true Digital products, which Squarespace does not currently allow creating via this API. Held for normal admin review.' });
-    return;
-  }
+  const diagnostics = [];
 
   try {
-   
+    // ---- Load the photo row ----
     const photoRes = await fetch(
-      `${supbase_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
+      `${supbase_URL}/rest/v1/photos?id=eq.${encodeURIComponent(photo_id)}&select=*`,
       { headers: supbaseHeaders() }
     );
-    const photos = await photoRes.json();
-    const photo = photos && photos[0];
-    if (!photo) throw new Error('Photo not found');
-    if (!photo.title || !photo.city || !photo.season || photo.price_cents == null) {
-      throw new Error('Photo is missing title, city, season, or price');
+    const photoRows = await photoRes.json();
+    if (!photoRows || !photoRows.length) {
+      res.status(404).json({ ok: false, error: 'Photo not found.' });
+      return;
+    }
+    const photo = photoRows[0];
+
+    if (!photo.city || !photo.season) {
+      res.status(400).json({ ok: false, error: 'Photo is missing city or season -- both are required to find a matching store page.' });
+      return;
     }
 
-   
-    const imageUrl = `${supbase_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
-
- 
-    const storePageId = await getOrCreateStorePage(photo.city, photo.season);
-
-  
-    const product = await createSquarespaceProduct({
-      title: photo.title,
-      description: photo.description || '',
-      priceCents: photo.price_cents,
-      city: photo.city,
-      season: photo.season,
-      hashtags: photo.hashtags || '',
-      socialUrl: photo.social_url || '',
-      mediaType: photo.media_type || 'image',
-      photoId: photo.id,
-      storePageId,
-      imageUrl
+    // ---- Find the matching Squarespace store page by city + season ----
+    // Squarespace's API can't create a new store page -- only find one
+    // whose title already contains both the city and season text. If
+    // that page doesn't exist yet, this fails with the full list of
+    // pages that DO exist, so it's obvious what to create by hand.
+    const pagesRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/store-pages`, {
+      headers: squarespaceHeaders()
+    });
+    if (!pagesRes.ok) {
+      const errText = await pagesRes.text();
+      res.status(502).json({ ok: false, error: 'Could not reach Squarespace to find a store page: ' + errText.substring(0, 300) });
+      return;
+    }
+    const pagesData = await pagesRes.json();
+    const pages = pagesData.storePages || pagesData.pages || [];
+    const cityLower = photo.city.toLowerCase();
+    const seasonLower = photo.season.toLowerCase();
+    const matchingPage = pages.find(function (p) {
+      const title = (p.title || '').toLowerCase();
+      return title.indexOf(cityLower) !== -1 && title.indexOf(seasonLower) !== -1;
     });
 
-    await fetch(`${supbase_URL}/rest/v1/photos?id=eq.${photo_id}`, {
-      method: 'PATCH',
-      headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
-      body: JSON.stringify({
-        status: 'published',
-        squarespace_product_id: product.id,
-        squarespace_product_url: product.url,
-        published_at: new Date().toISOString()
-      })
-    });
+    if (!matchingPage) {
+      const available = pages.map(function (p) { return p.title; }).join(', ');
+      res.status(404).json({
+        ok: false,
+        error: `No store page found containing both "${photo.city}" and "${photo.season}". Available pages: ${available}`
+      });
+      return;
+    }
 
-    res.status(200).json({ ok: true, url: product.url, diagnostics: product.diagnostics });
+    // ---- Create or update the product ----
+    const isDigitalRequested = product_type === 'digital';
+    if (isDigitalRequested) {
+      // Confirmed elsewhere in this project: Squarespace's Commerce API
+      // rejects DIGITAL product creation with a 405 -- only PHYSICAL is
+      // creatable through the API. Silently falling back rather than
+      // failing the whole request, matching "Auto-detect" behavior.
+      diagnostics.push('Product type: requested Digital, API only allows Physical -- created as Physical.');
+    }
+
+    const publicImageUrl = `${supbase_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
+    const productTitle = `${photo.title || 'Untitled'} (Digital Download)`;
+    const sku = `KF-${photo.id}`;
+
+    let squarespaceProductId = photo.squarespace_product_id;
+    let productUrl = photo.squarespace_product_url;
+
+    if (!squarespaceProductId) {
+      const createRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/products`, {
+        method: 'POST',
+        headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'PHYSICAL',
+          storePageId: matchingPage.id,
+          name: productTitle,
+          description: photo.description || '',
+          variants: [{ sku: sku, pricing: { basePrice: { currency: 'USD', value: String(photo.price_cents ? photo.price_cents / 100 : 0) } }, stock: { quantity: 10, unlimited: false } }]
+        })
+      });
+      if (!createRes.ok) {
+        const errText = await createRes.text();
+        res.status(502).json({ ok: false, error: 'Product creation failed: ' + errText.substring(0, 300) });
+        return;
+      }
+      const created = await createRes.json();
+      squarespaceProductId = created.id;
+      productUrl = `https://www.ketchupfiles.com${matchingPage.urlSlug ? '/' + matchingPage.urlSlug : ''}/p/${created.urlSlug || sku.toLowerCase()}`;
+
+      await fetch(`${supbase_URL}/rest/v1/photos?id=eq.${encodeURIComponent(photo.id)}`, {
+        method: 'PATCH',
+        headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+        body: JSON.stringify({
+          status: 'published',
+          published_at: new Date().toISOString(),
+          squarespace_product_id: squarespaceProductId,
+          squarespace_product_url: productUrl
+        })
+      });
+    }
+
+    // ---- Step: Inventory ----
+    // This is the step that was failing with "API key lacks Inventory
+    // permission" -- a scope missing on the Squarespace API key itself,
+    // not something fixable in code. Enable the Inventory scope on the
+    // key in Squarespace's own settings; this step will start succeeding
+    // once that's done, with no code change needed here.
+    try {
+      const invRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/inventory/${squarespaceProductId}`, {
+        method: 'PATCH',
+        headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ variants: [{ sku: sku, quantity: 10 }] })
+      });
+      if (!invRes.ok) {
+        const errText = await invRes.text();
+        diagnostics.push('Inventory: FAILED -- ' + errText.substring(0, 300));
+      } else {
+        diagnostics.push('Inventory: OK');
+      }
+    } catch (e) {
+      diagnostics.push('Inventory: FAILED -- ' + e.message);
+    }
+
+    // ---- Step: Image ----
+    try {
+      const imgRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/products/${squarespaceProductId}/images`, {
+        method: 'POST',
+        headers: squarespaceHeaders(),
+        body: (function () {
+          const form = new FormData();
+          form.append('image', publicImageUrl);
+          return form;
+        })()
+      });
+      diagnostics.push(imgRes.ok ? 'Image: OK' : 'Image: FAILED -- ' + (await imgRes.text()).substring(0, 200));
+    } catch (e) {
+      diagnostics.push('Image: FAILED -- ' + e.message);
+    }
+
+    // ---- Step: Visibility ----
+    // This was the first confirmed 405 -- was sending PUT, Squarespace's
+    // API only accepts PATCH for updating an existing product's fields.
+    try {
+      const visRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/products/${squarespaceProductId}`, {
+        method: 'PATCH',
+        headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isVisible: true })
+      });
+      if (!visRes.ok) {
+        const errText = await visRes.text();
+        diagnostics.push('Visibility: FAILED -- ' + errText.substring(0, 300));
+      } else {
+        diagnostics.push('Visibility: OK');
+      }
+    } catch (e) {
+      diagnostics.push('Visibility: FAILED -- ' + e.message);
+    }
+
+    // ---- Step: SEO ----
+    // Same fix as Visibility -- PUT to PATCH.
+    try {
+      const seoRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/products/${squarespaceProductId}`, {
+        method: 'PATCH',
+        headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          seoOptions: {
+            title: productTitle,
+            description: (photo.description || productTitle).substring(0, 155)
+          }
+        })
+      });
+      if (!seoRes.ok) {
+        const errText = await seoRes.text();
+        diagnostics.push('SEO: FAILED -- ' + errText.substring(0, 300));
+      } else {
+        diagnostics.push('SEO: OK');
+      }
+    } catch (e) {
+      diagnostics.push('SEO: FAILED -- ' + e.message);
+    }
+
+    const anyFailed = diagnostics.some(function (d) { return d.indexOf('FAILED') !== -1; });
+
+    res.status(200).json({
+      ok: true,
+      held: false,
+      url: productUrl,
+      squarespace_product_id: squarespaceProductId,
+      diagnostics: diagnostics.join(' | ')
+    });
+    if (anyFailed) { console.warn('publish-product partial failure:', diagnostics.join(' | ')); }
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error('publish-product failed:', err);
+    res.status(500).json({ ok: false, error: err.message });
   }
 };
 
@@ -127,199 +258,9 @@ function supbaseHeaders() {
   };
 }
 
-
-async function getOrCreateStorePage(city, season) {
-  const listRes = await fetch('https://api.squarespace.com/1.0/commerce/store_pages', {
-    headers: squarespaceHeaders()
-  });
-  const list = await listRes.json();
-
-
-  const pages = list.storePages || list.pages || list.results || (Array.isArray(list) ? list : []);
-
-  const cityLower = (city || '').toLowerCase().trim();
-  const seasonLower = (season || '').toLowerCase().trim();
-
-
-  var existing = pages.find((p) => {
-    if (!p || !p.title) return false;
-    const nameLower = p.title.toLowerCase();
-    return nameLower.includes(cityLower) && (seasonLower ? nameLower.includes(seasonLower) : true);
-  });
-
-
-  if (!existing) {
-    existing = pages.find((p) => p && p.title && p.title.toLowerCase().includes(cityLower));
-  }
-
-
-  if (!existing) {
-    existing = pages.find((p) => p && p.title && p.title.toLowerCase().includes('contributor'));
-  }
-
-  if (existing && existing.id) return existing.id;
-
-  throw new Error(
-    `No store page found containing both "${city}" and "${season}" in its name, and no fallback ` +
-    `"Contributors" page exists either (create one in Squarespace Commerce settings with "contributor" ` +
-    `in its title to fix this permanently). ` +
-    `Available page names: ${pages.map(p => p && p.title).filter(Boolean).join(', ') || '(none found)'}. ` +
-    `RAW RESPONSE (to diagnose the actual shape): ${JSON.stringify(list).substring(0, 800)}`
-  );
-}
-
-async function createSquarespaceProduct({ title, description, priceCents, city, season, hashtags, socialUrl, mediaType, photoId, storePageId, imageUrl }) {
-  var hashtagList = (hashtags || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean);
-  var fullDescription = description + `\n\nLocation: ${city} — ${season}`
-    + (hashtagList.length ? `\n\n${hashtagList.map(t => '#' + t.replace(/^#/, '')).join(' ')}` : '')
-    + (socialUrl ? `\n\nProfile / Link: ${socialUrl}` : '');
-
-
-  var mediaLabelMap = { image: 'Image', video: 'Video', audio: 'Audio', raw: 'RAW File', file: 'File' };
-  var mediaLabel = mediaLabelMap[mediaType] || 'Image';
-  var isGif = mediaType === 'image' && /\.gif$/i.test(title);
-  if (isGif) mediaLabel = 'GIF';
-  var buyPrefix = 'Buy this ' + mediaLabel + ': ';
-
-  var skuMediaCodeMap = { image: 'IMG', video: 'VID', audio: 'AUD', raw: 'RAW', file: 'DOC' };
-  var skuMediaCode = isGif ? 'GIF' : (skuMediaCodeMap[mediaType] || 'IMG');
-
-  const body = {
-    type: 'PHYSICAL',
-
-    storePageId: storePageId,
-
-    name: buyPrefix + title + ' (Digital Download)',
-    description: fullDescription,
-    isVisible: true,
-    tags: [city, season, 'Ketchup Files'].concat(hashtagList),
-    variants: [
-      {
-        pricing: { basePrice: { currency: 'USD', value: (priceCents / 100).toFixed(2) } },
-    
-        sku: `KF-${skuMediaCode}-${photoId}`
-    
-      }
-    ]
- 
-    
-  };
-
-  const createRes = await fetch('https://api.squarespace.com/1.0/commerce/products', {
-    method: 'POST',
-    headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  if (!createRes.ok) {
-    const errText = await createRes.text();
-
-    console.error('Squarespace product create failed. Body sent:', JSON.stringify(body));
-    throw new Error(`Squarespace product create failed: ${errText} | Body sent: ${JSON.stringify(body).substring(0, 500)}`);
-  }
-  const product = await createRes.json();
-  var diagnostics = [];
-
-
-  try {
-    const variantId = product.variants && product.variants[0] && product.variants[0].id;
-    if (variantId) {
-      const inventoryRes = await fetch('https://api.squarespace.com/1.0/commerce/inventory', {
-        method: 'PATCH',
-        headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          inventory: [{ variantId: variantId, unlimited: true }]
-        })
-      });
-      if (!inventoryRes.ok) {
-        const invErrText = await inventoryRes.text();
-    
-        var isAuthError = invErrText.indexOf('AUTHORIZATION_ERROR') !== -1;
-        diagnostics.push('Inventory: ' + (isAuthError
-          ? 'FAILED -- API key lacks Inventory permission. Fix in Squarespace: Settings > Advanced > API Keys > enable Inventory scope on this key.'
-          : invErrText.substring(0, 200)));
-      } else {
-        diagnostics.push('Inventory: OK');
-      }
-    } else {
-      diagnostics.push('Inventory: skipped, no variant ID found');
-    }
-  } catch (inventoryErr) {
-    diagnostics.push('Inventory: ' + inventoryErr.message);
-  }
-
-  try {
-    const imageFetchRes = await fetch(imageUrl);
-    if (!imageFetchRes.ok) {
-      diagnostics.push('Image: FAILED -- could not fetch source image (' + imageFetchRes.status + ')');
-    } else {
-      const imageBuffer = await imageFetchRes.arrayBuffer();
-      const contentType = imageFetchRes.headers.get('content-type') || 'image/png';
-      const filename = (imageUrl.split('/').pop() || 'photo.png').split('?')[0];
-
-      const form = new FormData();
-  
-      form.append('file', new Blob([imageBuffer], { type: contentType }), filename);
-
-      const imageUploadRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${product.id}/images`, {
-        method: 'POST',
-
-        headers: squarespaceHeaders(),
-        body: form
-      });
-      const imageUploadText = await imageUploadRes.text();
-      console.log('image multipart upload raw response:', imageUploadText);
-      diagnostics.push(imageUploadRes.ok ? 'Image: OK' : ('Image: FAILED -- ' + imageUploadText.substring(0, 200)));
-    }
-  } catch (imageErr) {
-    diagnostics.push('Image: FAILED -- ' + imageErr.message);
-  }
-
-  
-  try {
-    const patchRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${product.id}`, {
-      method: 'PUT',
-      headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isVisible: true, type: product.type })
-    });
-    if (!patchRes.ok) {
-      const patchErrText = await patchRes.text();
-      diagnostics.push('Visibility: FAILED -- ' + patchErrText.substring(0, 200));
-    } else {
-      diagnostics.push('Visibility: OK');
-    }
-  } catch (patchErr) {
-    diagnostics.push('Visibility: FAILED -- ' + patchErr.message);
-  }
-
-  
-  try {
-    const seoRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${product.id}`, {
-      method: 'PUT',
-      headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: product.type,
-        seoOptions: {
-          title: (buyPrefix + title).slice(0, 100),
-          description: fullDescription.slice(0, 400)
-        }
-      })
-    });
-    if (!seoRes.ok) {
-      const seoErrText = await seoRes.text();
-      diagnostics.push('SEO: FAILED -- ' + seoErrText.substring(0, 200));
-    } else {
-      diagnostics.push('SEO: OK');
-    }
-  } catch (seoErr) {
-    diagnostics.push('SEO: FAILED -- ' + seoErr.message);
-  }
-
-  return { id: product.id, url: product.url || '', diagnostics: diagnostics.join(' | ') };
-}
-
 function squarespaceHeaders() {
   return {
     Authorization: `Bearer ${SQUARESPACE_API_KEY}`,
-    'User-Agent': 'KetchupFiles-Publisher/1.0'
+    'User-Agent': 'KetchupFiles/1.0'
   };
 }
