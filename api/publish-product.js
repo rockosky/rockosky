@@ -23,7 +23,18 @@ const BUCKET = "Ketchup Files UPLOADS";
 const ADMIN_EMAIL = "creators@ketchupfiles.com";
 
 module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // Restricted from a wildcard ('*') to a real allowlist. Note this is
+  // defense-in-depth, not the primary lock on privileged actions -- CORS
+  // is enforced by browsers (it stops OTHER websites' JS from reading
+  // the response), not something a direct request (curl, a script)
+  // respects at all. The real protection for anything privileged here
+  // is the admin-token verification elsewhere in this file. 'null' is
+  // included because Interfaz Studio's tools run inside srcdoc iframes,
+  // which report an opaque 'null' origin in most browsers -- omitting
+  // it would silently break every tool embedded that way.
+  var ALLOWED_ORIGINS = ['https://www.ketchupfiles.com', 'https://ketchupfiles.com', 'null'];
+  var requestOrigin = req.headers.origin;
+  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGINS.indexOf(requestOrigin) !== -1 ? requestOrigin : 'https://www.ketchupfiles.com');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
