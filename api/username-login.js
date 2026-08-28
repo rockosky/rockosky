@@ -1,11 +1,37 @@
-
+// /api/username-login.js
+//
+// Lets someone sign in with just a username instead of remembering
+// their email. supbase's own auth system only accepts email for the
+// password grant -- there's no username grant type -- so this resolves
+// username -> email entirely server-side using the service role key,
+// then does the real sign-in on the user's behalf. The email itself is
+// never sent back to the browser at any point; only the resulting
+// session tokens are, which is all the client actually needs.
+//
+// ============================================================
+// ONE-TIME SETUP: same SUPBASE_URL / SUPBASE_SERVICE_ROLE_KEY env vars
+// already used by the other functions -- no new variables needed.
+// Also requires add-username.sql to have been run (adds the username
+// column this depends on).
+// ============================================================
 
 const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
 const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
 const supbase_ANON_KEY = "sb_publishable_KX1Hpau0Lc7M_n1snlYbEw_lnr_GfL9";
 
 module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // Restricted from a wildcard ('*') to a real allowlist. Note this is
+  // defense-in-depth, not the primary lock on privileged actions -- CORS
+  // is enforced by browsers (it stops OTHER websites' JS from reading
+  // the response), not something a direct request (curl, a script)
+  // respects at all. The real protection for anything privileged here
+  // is the admin-token verification elsewhere in this file. 'null' is
+  // included because Interfaz Studio's tools run inside srcdoc iframes,
+  // which report an opaque 'null' origin in most browsers -- omitting
+  // it would silently break every tool embedded that way.
+  var ALLOWED_ORIGINS = ['https://www.ketchupfiles.com', 'https://ketchupfiles.com', 'null'];
+  var requestOrigin = req.headers.origin;
+  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGINS.indexOf(requestOrigin) !== -1 ? requestOrigin : 'https://www.ketchupfiles.com');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
