@@ -1,17 +1,4 @@
-// /api/is-admin.js
-//
-// Answers exactly one question -- "is this access token the real admin
-// account?" -- without ever sending the admin's actual email back to
-// the client. The retro chat's username-based login deliberately never
-// exposes a user's email client-side (that's the whole point of
-// resolving username -> email server-side in username-login.js), so
-// the client genuinely has no way to check "am I admin?" on its own.
-// This is that check, done safely.
-//
-// ============================================================
-// ONE-TIME SETUP: same SUPBASE_URL / SUPBASE_SERVICE_ROLE_KEY env vars
-// already used by the other functions -- no new variables needed.
-// ============================================================
+
 
 const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
 const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
