@@ -1,4 +1,23 @@
-
+// /api/my-downloads.js
+//
+// Lets a logged-in contributor get fresh, working download links to
+// their OWN original (un-watermarked) uploads, any time -- not just
+// within the 72-hour window of an old purchase receipt. This is for
+// contributors re-accessing their own work, not for buyers accessing
+// someone else's photo.
+//
+// Security note: this does NOT trust a user_id sent from the browser.
+// It takes the contributor's real supbase access token (from their
+// logged-in session) and asks supbase directly "who does this token
+// actually belong to" -- only that verified identity's own photos are
+// ever returned. A request with no valid token, or someone else's
+// token, gets nothing.
+//
+// ============================================================
+// ONE-TIME SETUP: same SUPBASE_URL / SUPBASE_SERVICE_ROLE_KEY env vars
+// already used by publish-product.js and fulfill-order.js -- no new
+// variables needed if those are already deployed.
+// ============================================================
 
 const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
 const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
@@ -7,7 +26,18 @@ const ORIGINALS_BUCKET = "Ketchup Files ORIGINALS";
 const SIGNED_URL_EXPIRY_SECONDS = 60 * 60; // 1 hour -- short-lived on purpose, since this endpoint can just be called again for a fresh one any time
 
 module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // Restricted from a wildcard ('*') to a real allowlist. Note this is
+  // defense-in-depth, not the primary lock on privileged actions -- CORS
+  // is enforced by browsers (it stops OTHER websites' JS from reading
+  // the response), not something a direct request (curl, a script)
+  // respects at all. The real protection for anything privileged here
+  // is the admin-token verification elsewhere in this file. 'null' is
+  // included because Interfaz Studio's tools run inside srcdoc iframes,
+  // which report an opaque 'null' origin in most browsers -- omitting
+  // it would silently break every tool embedded that way.
+  var ALLOWED_ORIGINS = ['https://www.ketchupfiles.com', 'https://ketchupfiles.com', 'null'];
+  var requestOrigin = req.headers.origin;
+  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGINS.indexOf(requestOrigin) !== -1 ? requestOrigin : 'https://www.ketchupfiles.com');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
