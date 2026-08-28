@@ -1,7 +1,7 @@
 
 
-const SUPABASE_URL = process.env.SUPBASE_URL || process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
+const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
 const ORIGINALS_BUCKET = "Ketchup Files ORIGINALS";
 const SIGNED_URL_EXPIRY_SECONDS = 60 * 60 * 72; // 72 hours -- matches fulfill-order.js's own expiry
 
@@ -12,8 +12,8 @@ module.exports = async (req, res) => {
   if (req.method !== 'GET') { res.status(405).json({ error: 'Method not allowed' }); return; }
 
   const missingEnvVars = [];
-  if (!SUPABASE_URL) missingEnvVars.push('SUPBASE_URL');
-  if (!SUPABASE_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
+  if (!supbase_URL) missingEnvVars.push('SUPBASE_URL');
+  if (!supbase_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
   if (missingEnvVars.length) {
     res.status(500).json({ error: `Missing Vercel environment variable(s): ${missingEnvVars.join(', ')}` });
     return;
@@ -24,8 +24,8 @@ module.exports = async (req, res) => {
 
   try {
     const fulfillmentsRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/order_fulfillments?squarespace_order_id=eq.${encodeURIComponent(orderId)}&select=photo_id`,
-      { headers: supabaseHeaders() }
+      `${supbase_URL}/rest/v1/order_fulfillments?squarespace_order_id=eq.${encodeURIComponent(orderId)}&select=photo_id`,
+      { headers: supbaseHeaders() }
     );
     const fulfillments = await fulfillmentsRes.json();
 
@@ -42,8 +42,8 @@ module.exports = async (req, res) => {
 
     const orFilter = photoIds.map(id => `id.eq.${id}`).join(',');
     const photosRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/photos?or=(${orFilter})&select=id,title,original_file_path`,
-      { headers: supabaseHeaders() }
+      `${supbase_URL}/rest/v1/photos?or=(${orFilter})&select=id,title,original_file_path`,
+      { headers: supbaseHeaders() }
     );
     const photos = await photosRes.json();
 
@@ -73,16 +73,16 @@ module.exports = async (req, res) => {
 async function createSignedUrl(path) {
   try {
     const res = await fetch(
-      `${SUPABASE_URL}/storage/v1/object/sign/${encodeURIComponent(ORIGINALS_BUCKET)}/${path}`,
+      `${supbase_URL}/storage/v1/object/sign/${encodeURIComponent(ORIGINALS_BUCKET)}/${path}`,
       {
         method: 'POST',
-        headers: { ...supabaseHeaders(), 'Content-Type': 'application/json' },
+        headers: { ...supbaseHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ expiresIn: SIGNED_URL_EXPIRY_SECONDS })
       }
     );
     if (!res.ok) return null;
     const data = await res.json();
-    return data.signedURL ? `${SUPABASE_URL}/storage/v1${data.signedURL}` : null;
+    return data.signedURL ? `${supbase_URL}/storage/v1${data.signedURL}` : null;
   } catch (e) {
     return null;
   }
@@ -97,10 +97,10 @@ function guessExtension(storagePath) {
   return match ? match[0] : '';
 }
 
-function supabaseHeaders() {
+function supbaseHeaders() {
   return {
-    apikey: SUPABASE_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+    apikey: supbase_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${supbase_SERVICE_ROLE_KEY}`
   };
 }
 
