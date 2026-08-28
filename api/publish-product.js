@@ -248,15 +248,6 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     // says otherwise.
     name: buyPrefix + title + ' (Digital Download)',
     description: fullDescription,
-    // SEO fields were never being sent at all -- Squarespace's product
-    // SEO panel was sitting empty every time, not because of any error,
-    // just because nothing populated it. Reusing the same real title
-    // and description the contributor already typed, rather than
-    // inventing separate SEO copy -- truncated to Squarespace's own
-    // displayed limits (100 / 400 characters) so a long caption doesn't
-    // get silently rejected or cut off oddly by their API.
-    seoTitle: (buyPrefix + title).slice(0, 100),
-    seoDescription: fullDescription.slice(0, 400),
     isVisible: true,
     tags: [city, season, 'Ketchup Files'].concat(hashtagList),
     variants: [
@@ -288,6 +279,23 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     // the product exists, not in the initial create request. That
     // follow-up call still needs to be built and tested — until then,
     // products publish successfully but without a photo attached yet.
+    //
+    // NOTE: 'seoTitle' and 'seoDescription' also removed from here as of
+    // this fix. They were added on the theory that Squarespace's SEO
+    // panel accepts them flat at the top level of the create body --
+    // untested at the time, and this is the exact same "unknown or
+    // readonly fields" error signature already seen twice before with
+    // 'stock' and 'images', both of which turned out to need a
+    // different approach (removed entirely, or a separate follow-up
+    // call after creation). SEO fields are the prime remaining suspect
+    // since they're the newest, least-verified addition -- possibly
+    // Squarespace expects them nested under a "seoOptions" object
+    // instead of flat, or via a separate endpoint entirely, similar to
+    // images. Left as a genuine follow-up rather than guessed at again
+    // blind -- the diagnostic logging below will show the real
+    // Squarespace error text directly if create still fails after this,
+    // instead of the generic message with no specifics that shipped
+    // before.
   };
 
   const createRes = await fetch('https://api.squarespace.com/1.0/commerce/products', {
@@ -297,7 +305,13 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
   });
   if (!createRes.ok) {
     const errText = await createRes.text();
-    throw new Error(`Squarespace product create failed: ${errText}`);
+    // Previously this only surfaced Squarespace's own error text, which
+    // in this exact failure mode comes back with "details: null" --
+    // genuinely unhelpful for figuring out WHICH field is the problem.
+    // Including the actual request body sent means the next failure (if
+    // any) is immediately diagnosable instead of another guessing round.
+    console.error('Squarespace product create failed. Body sent:', JSON.stringify(body));
+    throw new Error(`Squarespace product create failed: ${errText} | Body sent: ${JSON.stringify(body).substring(0, 500)}`);
   }
   const product = await createRes.json();
   var diagnostics = [];
@@ -402,6 +416,36 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     }
   } catch (patchErr) {
     diagnostics.push('Visibility: FAILED -- ' + patchErr.message);
+  }
+
+  // SEO fields, attempted as a separate follow-up call rather than in
+  // the initial create body -- that's exactly where 'stock' and
+  // 'images' also turned out to need to live, both having been
+  // rejected as "unknown or readonly fields" when included at create
+  // time. Non-blocking: if Squarespace rejects this too, the product
+  // itself has already been created successfully and stays that way --
+  // only the SEO panel would be left empty, same as before this fix,
+  // not a failed publish.
+  try {
+    const seoRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${product.id}`, {
+      method: 'PUT',
+      headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: product.type,
+        seoOptions: {
+          title: (buyPrefix + title).slice(0, 100),
+          description: fullDescription.slice(0, 400)
+        }
+      })
+    });
+    if (!seoRes.ok) {
+      const seoErrText = await seoRes.text();
+      diagnostics.push('SEO: FAILED -- ' + seoErrText.substring(0, 200));
+    } else {
+      diagnostics.push('SEO: OK');
+    }
+  } catch (seoErr) {
+    diagnostics.push('SEO: FAILED -- ' + seoErr.message);
   }
 
   return { id: product.id, url: product.url || '', diagnostics: diagnostics.join(' | ') };
