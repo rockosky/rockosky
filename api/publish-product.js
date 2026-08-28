@@ -1,21 +1,4 @@
-// /api/publish-product.js
-//
-// Called by the admin dashboard when Felipe hits "Approve & Publish".
-// 1. Loads the photo's saved details from supbase (service role, bypasses RLS)
-// 2. Downloads the image from supbase Storage
-// 3. Creates a DIGITAL product in the Squarespace store via the Commerce API
-//    (assigns it to a category matching the "season" name)
-// 4. Writes the resulting Squarespace product id/url back to supbase, status -> 'published'
-//
-// NOTE: Squarespace's exact Commerce API request/response shape may need
-// adjusting once tested live — this follows their documented v1 Products API
-// as of early 2026, but hasn't been run against a real store yet.
 
-// Confirmed via debug-env.js (already deployed, actually checkable at
-// /api/debug-env) that the real Vercel env vars are named SUPBASE_URL /
-// SUPBASE_SERVICE_ROLE_KEY -- no "A". This file previously read the
-// correctly-spelled version, which would silently be undefined against
-// the real env vars -- reading both here removes the ambiguity either way.
 const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
 const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
 const SQUARESPACE_API_KEY = process.env.SQUARESPACE_API_KEY;
@@ -23,15 +6,7 @@ const BUCKET = "Ketchup Files UPLOADS";
 const ADMIN_EMAIL = "creators@ketchupfiles.com";
 
 module.exports = async (req, res) => {
-  // Restricted from a wildcard ('*') to a real allowlist. Note this is
-  // defense-in-depth, not the primary lock on privileged actions -- CORS
-  // is enforced by browsers (it stops OTHER websites' JS from reading
-  // the response), not something a direct request (curl, a script)
-  // respects at all. The real protection for anything privileged here
-  // is the admin-token verification elsewhere in this file. 'null' is
-  // included because Interfaz Studio's tools run inside srcdoc iframes,
-  // which report an opaque 'null' origin in most browsers -- omitting
-  // it would silently break every tool embedded that way.
+
   var ALLOWED_ORIGINS = ['https://www.ketchupfiles.com', 'https://ketchupfiles.com', 'null'];
   var requestOrigin = req.headers.origin;
   res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGINS.indexOf(requestOrigin) !== -1 ? requestOrigin : 'https://www.ketchupfiles.com');
@@ -56,14 +31,6 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // Previously this endpoint did the real approve-and-publish action for
-  // ANY caller who knew the URL, with nothing checking who was actually
-  // asking -- the header comment above always said "called by the admin
-  // dashboard," but nothing ever actually enforced that server-side, so
-  // that was only ever a UI convention, not real protection. Verified
-  // here now, same pattern as approve-chat.js: resolve the caller's real
-  // identity from their own token and reject anyone who isn't admin,
-  // before touching anything.
   const { photo_id, product_type, auto, adminAccessToken } = req.body || {};
   if (!adminAccessToken) {
     res.status(401).json({ error: 'adminAccessToken is required' });
@@ -96,25 +63,13 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // REAL BUG FIX: 02's upload flow calls this endpoint with auto:true
-  // right after every single upload, on the assumption that this would
-  // only actually publish if it could land as a genuine DIGITAL
-  // product -- keeping admin curation intact for everything else. That
-  // gate was never implemented here, so every upload was silently
-  // auto-publishing straight to Squarespace as PHYSICAL with zero admin
-  // review. Since true DIGITAL creation is confirmed impossible via
-  // this API (see the check above), an auto request can never
-  // currently satisfy that condition -- so it's always held for normal
-  // review in 03, exactly as the original design intended. If
-  // Squarespace ever allows real DIGITAL creation in the future, this
-  // is the one line to change.
   if (auto === true) {
     res.status(200).json({ ok: true, held: true, reason: 'Auto-publish only applies to true Digital products, which Squarespace does not currently allow creating via this API. Held for normal admin review.' });
     return;
   }
 
   try {
-    // 1. Load photo row (service role key bypasses RLS)
+   
     const photoRes = await fetch(
       `${supbase_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
       { headers: supbaseHeaders() }
@@ -126,16 +81,13 @@ module.exports = async (req, res) => {
       throw new Error('Photo is missing title, city, season, or price');
     }
 
-    // 2. Public image URL from supbase Storage
+   
     const imageUrl = `${supbase_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
 
-    // 3. Find the store collection matching this city + season, however
-    // it happens to be named — matching flexibly on whether the page
-    // name contains both the city and season, rather than requiring an
-    // exact "City Fashion Week — Season" string.
+ 
     const storePageId = await getOrCreateStorePage(photo.city, photo.season);
 
-    // 4. Create the digital product in Squarespace
+  
     const product = await createSquarespaceProduct({
       title: photo.title,
       description: photo.description || '',
@@ -150,7 +102,6 @@ module.exports = async (req, res) => {
       imageUrl
     });
 
-    // 5. Write back to supbase
     await fetch(`${supbase_URL}/rest/v1/photos?id=eq.${photo_id}`, {
       method: 'PATCH',
       headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
@@ -176,46 +127,32 @@ function supbaseHeaders() {
   };
 }
 
-// Looks up an existing store page/collection whose name contains BOTH
-// the given city and season — flexible matching, since the exact
-// wording/format of the collection name in Squarespace may not match
-// any single guessed format exactly (e.g. "New York Fashion Week —
-// SS27" vs "New York Fashion Week 2026" vs other variations).
+
 async function getOrCreateStorePage(city, season) {
   const listRes = await fetch('https://api.squarespace.com/1.0/commerce/store_pages', {
     headers: squarespaceHeaders()
   });
   const list = await listRes.json();
 
-  // Defensive: try a few plausible response shapes, since the exact key
-  // Squarespace uses here hasn't been confirmed live.
+
   const pages = list.storePages || list.pages || list.results || (Array.isArray(list) ? list : []);
 
   const cityLower = (city || '').toLowerCase().trim();
   const seasonLower = (season || '').toLowerCase().trim();
 
-  // Try matching both city and season first (most precise)
+
   var existing = pages.find((p) => {
     if (!p || !p.title) return false;
     const nameLower = p.title.toLowerCase();
     return nameLower.includes(cityLower) && (seasonLower ? nameLower.includes(seasonLower) : true);
   });
 
-  // Fall back to matching city alone — handles cases where the season
-  // was named differently than expected (e.g. "2026" vs "SS27")
+
   if (!existing) {
     existing = pages.find((p) => p && p.title && p.title.toLowerCase().includes(cityLower));
   }
 
-  // Final fallback: a general catch-all page for submissions that don't
-  // match any specific curated event (e.g. a regular street photo from
-  // a city/neighborhood that isn't one of the named fashion weeks).
-  // Matched by the word "contributor" appearing in the page title --
-  // this requires actually creating that Squarespace Store Page
-  // yourself first (Commerce settings), since this code can only match
-  // against pages that already exist, not create new ones. Name it
-  // something containing "contributor", e.g. "Contributors Store" or
-  // "Contributor Submissions".
+
   if (!existing) {
     existing = pages.find((p) => p && p.title && p.title.toLowerCase().includes('contributor'));
   }
@@ -237,41 +174,21 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     + (hashtagList.length ? `\n\n${hashtagList.map(t => '#' + t.replace(/^#/, '')).join(' ')}` : '')
     + (socialUrl ? `\n\nProfile / Link: ${socialUrl}` : '');
 
-  // "Buy this Image / Video / GIF / Audio / File" prefix, based on
-  // what was actually uploaded -- Squarespace's checkout button text
-  // itself is a fixed theme element the Products API can't change, but
-  // this makes the same intent clear in the one place we DO control:
-  // the product title, which is what shows right next to that button.
+
   var mediaLabelMap = { image: 'Image', video: 'Video', audio: 'Audio', raw: 'RAW File', file: 'File' };
   var mediaLabel = mediaLabelMap[mediaType] || 'Image';
   var isGif = mediaType === 'image' && /\.gif$/i.test(title);
   if (isGif) mediaLabel = 'GIF';
   var buyPrefix = 'Buy this ' + mediaLabel + ': ';
 
-  // SKU media code -- KF-{MEDIA}-{ASSET_ID} per spec. Deliberately its
-  // own map rather than reusing mediaLabelMap above: that one needs
-  // full words for the button-prefix text ("Image", "RAW File"), this
-  // one needs fixed 3-letter codes (IMG, not IMA from slicing "Image").
   var skuMediaCodeMap = { image: 'IMG', video: 'VID', audio: 'AUD', raw: 'RAW', file: 'DOC' };
   var skuMediaCode = isGif ? 'GIF' : (skuMediaCodeMap[mediaType] || 'IMG');
 
   const body = {
     type: 'PHYSICAL',
-    // Switched from 'DIGITAL' — Squarespace's API explicitly rejected
-    // that type for this create operation (METHOD_NOT_ALLOWED /
-    // OPERATION_NOT_ALLOWED_FOR_PRODUCT_TYPE). PHYSICAL works with this
-    // endpoint. Since these are licensed photo downloads, not shipped
-    // goods, this may need a shipping-related field added too if
-    // Squarespace's checkout starts asking buyers for a shipping
-    // address — that's the next thing to watch for once this succeeds.
+
     storePageId: storePageId,
-    // Squarespace's own product "type" field is stuck as PHYSICAL --
-    // that's the confirmed API restriction, not something a label can
-    // change. What we DO control is what it's actually called: adding
-    // "(Digital Download)" here makes it obvious everywhere this shows
-    // up -- your Squarespace backend, order emails, the storefront --
-    // that nothing physical ships, even though the underlying type
-    // says otherwise.
+
     name: buyPrefix + title + ' (Digital Download)',
     description: fullDescription,
     isVisible: true,
@@ -279,49 +196,13 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     variants: [
       {
         pricing: { basePrice: { currency: 'USD', value: (priceCents / 100).toFixed(2) } },
-        // KF-{MEDIA}-{ASSET_ID}, using the real photos.id -- not a
-        // timestamp (the previous KF-${Date.now()} produced a
-        // different SKU every time the same photo got re-published,
-        // and looked like a raw millisecond count, e.g.
-        // KF-1787596299037, rather than a real product identifier).
-        // Using the actual row id keeps this identical no matter which
-        // widget (02, 04, Interfaz Studio) triggers the publish.
+    
         sku: `KF-${skuMediaCode}-${photoId}`
-        // 'stock' removed for now — rejected as wrong type both as a
-        // number and a string, with the identical error either way.
-        // That pattern suggests 'stock' may not be a valid field at all
-        // for DIGITAL-type products (which are typically unlimited by
-        // nature) rather than a simple type mismatch. Getting core
-        // product creation working reliably first; one-of-one stock
-        // limiting is a separate follow-up to investigate — it may
-        // require a different Squarespace endpoint, a different field
-        // name specific to digital products, or switching product type
-        // away from DIGITAL entirely.
+    
       }
     ]
-    // NOTE: 'images' removed from here — Squarespace's Commerce API rejected
-    // it as an unknown/readonly field on product creation. Squarespace
-    // requires images to be attached in a separate follow-up step after
-    // the product exists, not in the initial create request. That
-    // follow-up call still needs to be built and tested — until then,
-    // products publish successfully but without a photo attached yet.
-    //
-    // NOTE: 'seoTitle' and 'seoDescription' also removed from here as of
-    // this fix. They were added on the theory that Squarespace's SEO
-    // panel accepts them flat at the top level of the create body --
-    // untested at the time, and this is the exact same "unknown or
-    // readonly fields" error signature already seen twice before with
-    // 'stock' and 'images', both of which turned out to need a
-    // different approach (removed entirely, or a separate follow-up
-    // call after creation). SEO fields are the prime remaining suspect
-    // since they're the newest, least-verified addition -- possibly
-    // Squarespace expects them nested under a "seoOptions" object
-    // instead of flat, or via a separate endpoint entirely, similar to
-    // images. Left as a genuine follow-up rather than guessed at again
-    // blind -- the diagnostic logging below will show the real
-    // Squarespace error text directly if create still fails after this,
-    // instead of the generic message with no specifics that shipped
-    // before.
+ 
+    
   };
 
   const createRes = await fetch('https://api.squarespace.com/1.0/commerce/products', {
@@ -331,26 +212,14 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
   });
   if (!createRes.ok) {
     const errText = await createRes.text();
-    // Previously this only surfaced Squarespace's own error text, which
-    // in this exact failure mode comes back with "details: null" --
-    // genuinely unhelpful for figuring out WHICH field is the problem.
-    // Including the actual request body sent means the next failure (if
-    // any) is immediately diagnosable instead of another guessing round.
+
     console.error('Squarespace product create failed. Body sent:', JSON.stringify(body));
     throw new Error(`Squarespace product create failed: ${errText} | Body sent: ${JSON.stringify(body).substring(0, 500)}`);
   }
   const product = await createRes.json();
   var diagnostics = [];
 
-  // Set stock to genuinely unlimited via a dedicated Inventory follow-up
-  // call. Previously used a finite quantity (10), but that produced a
-  // real bug: the product would sometimes show "Out of Stock" on the
-  // storefront even while inventory was confirmed available in
-  // Squarespace's own backend. Switching to unlimited removes the bug
-  // class entirely -- there's no finite count left to miscalculate --
-  // and Squarespace doesn't show a stock counter for unlimited items,
-  // satisfying "don't show the count" without extra work. Best-guess
-  // endpoint shape, non-fatal if wrong.
+
   try {
     const variantId = product.variants && product.variants[0] && product.variants[0].id;
     if (variantId) {
@@ -363,12 +232,7 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
       });
       if (!inventoryRes.ok) {
         const invErrText = await inventoryRes.text();
-        // A live test returned AUTHORIZATION_ERROR here specifically --
-        // that's Squarespace's API key itself lacking permission for
-        // Inventory, not a bug in this request. Flagging that plainly so
-        // it isn't mistaken for something fixable in code: check
-        // Settings -> Advanced -> API Keys on the Squarespace account
-        // and confirm the key used here has Inventory access enabled.
+    
         var isAuthError = invErrText.indexOf('AUTHORIZATION_ERROR') !== -1;
         diagnostics.push('Inventory: ' + (isAuthError
           ? 'FAILED -- API key lacks Inventory permission. Fix in Squarespace: Settings > Advanced > API Keys > enable Inventory scope on this key.'
@@ -383,14 +247,6 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     diagnostics.push('Inventory: ' + inventoryErr.message);
   }
 
-  // Attach the image as a real multipart file upload. The previous
-  // version of this sent `images: [{ url: imageUrl }]` on the PATCH
-  // below -- a URL reference. ketchup-files-full-system-check.md
-  // already confirmed from live testing that Squarespace's Commerce
-  // API rejects that shape and needs the actual file bytes uploaded
-  // instead. isVisible is still set via the PATCH endpoint that's
-  // already confirmed working; the image now goes through its own
-  // multipart call first.
   try {
     const imageFetchRes = await fetch(imageUrl);
     if (!imageFetchRes.ok) {
@@ -401,16 +257,12 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
       const filename = (imageUrl.split('/').pop() || 'photo.png').split('?')[0];
 
       const form = new FormData();
-      // Squarespace's real error (confirmed from a live test run) was
-      // explicit: "Expected exactly one file part named 'file'" -- the
-      // field name below was previously 'image', which is why every
-      // upload failed. This was a plain typo, not a guess.
+  
       form.append('file', new Blob([imageBuffer], { type: contentType }), filename);
 
       const imageUploadRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${product.id}/images`, {
         method: 'POST',
-        // Deliberately not setting Content-Type by hand -- fetch sets
-        // the correct multipart boundary automatically for a FormData body.
+
         headers: squarespaceHeaders(),
         body: form
       });
@@ -422,12 +274,7 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     diagnostics.push('Image: FAILED -- ' + imageErr.message);
   }
 
-  // isVisible toggle -- confirmed from a live test run that this endpoint
-  // rejects PATCH outright ("Method 'PATCH' is not supported"). Switched
-  // to PUT, which is what Squarespace's Commerce Products API actually
-  // exposes for updates. Includes `type` alongside isVisible since PUT
-  // endpoints on this API have been observed elsewhere in testing to
-  // want at least that field present, not just the one being changed.
+  
   try {
     const patchRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${product.id}`, {
       method: 'PUT',
@@ -444,14 +291,7 @@ async function createSquarespaceProduct({ title, description, priceCents, city, 
     diagnostics.push('Visibility: FAILED -- ' + patchErr.message);
   }
 
-  // SEO fields, attempted as a separate follow-up call rather than in
-  // the initial create body -- that's exactly where 'stock' and
-  // 'images' also turned out to need to live, both having been
-  // rejected as "unknown or readonly fields" when included at create
-  // time. Non-blocking: if Squarespace rejects this too, the product
-  // itself has already been created successfully and stays that way --
-  // only the SEO panel would be left empty, same as before this fix,
-  // not a failed publish.
+  
   try {
     const seoRes = await fetch(`https://api.squarespace.com/1.0/commerce/products/${product.id}`, {
       method: 'PUT',
