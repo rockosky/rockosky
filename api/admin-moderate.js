@@ -1,4 +1,23 @@
-
+// /api/admin-moderate.js
+//
+// Handles reject and delete for photo submissions. Approve is handled
+// separately by publish-product.js (since approving also means
+// actually publishing to Squarespace, a bigger action than a status
+// flip) -- this endpoint covers the other two admin actions.
+//
+// Built server-side and service-role-based on purpose, not as a
+// direct client-side database write: a similar direct-write pattern
+// elsewhere in this project (the original chat-approval feature)
+// looked like it worked in the UI but silently failed to actually
+// change the database, because it depended on Row-Level Security
+// permitting an admin account to write to *other* people's rows --
+// a permission that's easy to have missing. Going through the service
+// role key here sidesteps that category of bug entirely.
+//
+// ============================================================
+// ONE-TIME SETUP: same SUPBASE_URL / SUPBASE_SERVICE_ROLE_KEY env vars
+// already used by the other functions -- no new variables needed.
+// ============================================================
 
 const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
 const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
