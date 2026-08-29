@@ -178,17 +178,28 @@ module.exports = async (req, res) => {
     }
 
     // ---- Step: Image ----
+    // Squarespace's product-image endpoint needs the actual image bytes
+    // as a real multipart file, not a URL reference -- appending the URL
+    // string directly to FormData (the previous version of this code)
+    // sends it as plain text, which the endpoint rejects. Fetch the
+    // image from storage first, then upload it as a real file.
     try {
-      const imgRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/products/${squarespaceProductId}/images`, {
-        method: 'POST',
-        headers: squarespaceHeaders(),
-        body: (function () {
-          const form = new FormData();
-          form.append('image', publicImageUrl);
-          return form;
-        })()
-      });
-      diagnostics.push(imgRes.ok ? 'Image: OK' : 'Image: FAILED -- ' + (await imgRes.text()).substring(0, 200));
+      const imgFetchRes = await fetch(publicImageUrl);
+      if (!imgFetchRes.ok) {
+        diagnostics.push('Image: FAILED -- could not fetch source image from storage (' + imgFetchRes.status + ')');
+      } else {
+        const imgBuffer = await imgFetchRes.arrayBuffer();
+        const contentType = imgFetchRes.headers.get('content-type') || 'image/jpeg';
+        const filename = (photo.file_path || 'image.jpg').split('/').pop();
+        const form = new FormData();
+        form.append('image', new Blob([imgBuffer], { type: contentType }), filename);
+        const imgRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/products/${squarespaceProductId}/images`, {
+          method: 'POST',
+          headers: squarespaceHeaders(),
+          body: form
+        });
+        diagnostics.push(imgRes.ok ? 'Image: OK' : 'Image: FAILED -- ' + (await imgRes.text()).substring(0, 200));
+      }
     } catch (e) {
       diagnostics.push('Image: FAILED -- ' + e.message);
     }
