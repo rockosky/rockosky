@@ -1,35 +1,4 @@
-// /api/fulfill-order.js
-//
-// Squarespace order webhook target. Fires when a customer completes a
-// purchase; records which photo(s) they bought against the Squarespace
-// order id, so the receipt page (get-order-download.js, embedded on
-// ketchupfiles.com/commerce/orders/[order-id]) can look the order up and
-// hand back a fresh, unwatermarked signed download link.
-//
-// This does NOT create the signed download URL itself -- that happens
-// on demand in get-order-download.js every time the receipt page loads,
-// against the live "Ketchup Files ORIGINALS" bucket. This endpoint's only
-// job is to record the order -> photo mapping so that lookup has
-// something to find.
-//
-// Previously this imported '@supbase/supbase-js' via createClient, but
-// that package was never added to package.json -- it would fail with
-// "Cannot find module" the moment Vercel actually invoked it. Rewritten
-// to plain REST fetch calls with the service role key, matching every
-// other working endpoint in this project (get-order-download.js,
-// my-downloads.js, approve-chat.js, etc).
-//
-// ============================================================
-// SETUP:
-// - Same SUPBASE_URL / SUPBASE_SERVICE_ROLE_KEY env vars already used
-//   everywhere else in this project.
-// - RESEND_API_KEY, only needed if you want the confirmation email --
-//   safe to leave unset, the order/download itself doesn't depend on it.
-// - In Squarespace: Settings -> Advanced -> Webhooks (Store Notifications
-//   for newer sites), add an Order Fulfillment / Order Create webhook
-//   pointing at https://rockosky.vercel.app/api/fulfill-order. Without
-//   this being configured on the Squarespace side, this endpoint never
-//   gets called no matter how correct the code is.
+
 // ============================================================
 
 const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
