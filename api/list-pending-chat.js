@@ -1,21 +1,4 @@
-// /api/list-pending-chat.js
-//
-// Companion to approve-chat.js, for the read side of the same problem.
-// The admin dashboard's Chat Approvals tab was querying creator_profiles
-// straight from the browser using the admin's own logged-in session --
-// which IS subject to Row-Level Security. If there's no policy letting
-// the admin's account read *other* users' rows (a much less commonly
-// granted permission than "read your own row"), that query silently
-// returns empty. The tab shows "Nobody waiting for approval" even when
-// someone genuinely is -- no error, just nothing to click Approve on.
-//
-// This endpoint sidesteps that the same way approve-chat.js already
-// sidesteps it for the write: service role key, bypasses RLS entirely.
-//
-// ============================================================
-// ONE-TIME SETUP: same SUPBASE_URL / SUPBASE_SERVICE_ROLE_KEY env vars
-// already used by every other function -- no new variables needed.
-// ============================================================
+
 
 const SUPABASE_URL = process.env.SUPBASE_URL || process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -61,8 +44,10 @@ module.exports = async (req, res) => {
 
     // The actual read, using the service role key -- bypasses RLS,
     // so this actually sees every pending row, not just the admin's own.
+    // location/roster_city included so the admin can see roughly where
+    // each pending account is from, not just a name.
     const listRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/creator_profiles?chat_approved=eq.false&select=user_id,display_name,username,chat_approved`,
+      `${SUPABASE_URL}/rest/v1/creator_profiles?chat_approved=eq.false&select=user_id,display_name,username,chat_approved,location,roster_city`,
       {
         headers: {
           apikey: SUPABASE_SERVICE_ROLE_KEY,
@@ -78,7 +63,26 @@ module.exports = async (req, res) => {
     }
 
     const rows = await listRes.json();
-    res.status(200).json({ ok: true, pending: rows });
+
+    // Email lives on auth.users, not creator_profiles -- a completely
+    // separate table -- which is exactly why every pending account was
+    // showing up with no way to identify who it actually was. One admin
+    // API call per pending row; the list is small (people waiting on
+    // approval), so this stays cheap in practice.
+    const withEmail = await Promise.all(rows.map(async (row) => {
+      try {
+        const userRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${row.user_id}`, {
+          headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` }
+        });
+        if (userRes.ok) {
+          const userData = await userRes.json();
+          row.email = userData.email || null;
+        }
+      } catch (e) { /* non-fatal -- row still shows with whatever profile fields it has */ }
+      return row;
+    }));
+
+    res.status(200).json({ ok: true, pending: withEmail });
   } catch (err) {
     console.error('list-pending-chat failed:', err);
     res.status(500).json({ error: 'Could not load pending approvals. Try again in a moment.' });
