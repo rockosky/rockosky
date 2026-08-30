@@ -1,17 +1,4 @@
-// /api/list-pending-photos.js
-//
-// Lists photos with status='pending' for the retro chat's ADMIN tab.
-// Same reasoning as list-pending-chat.js: rather than querying `photos`
-// straight from the browser (which depends on whatever RLS policy is
-// or isn't configured for the signed-in account), this goes through
-// the service role key server-side so it reliably sees every pending
-// row regardless of RLS, and verifies the caller is genuinely the
-// admin account first.
-//
-// ============================================================
-// ONE-TIME SETUP: same SUPBASE_URL / SUPBASE_SERVICE_ROLE_KEY env vars
-// already used by every other function -- no new variables needed.
-// ============================================================
+
 
 const SUPABASE_URL = process.env.SUPBASE_URL || process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -55,7 +42,7 @@ module.exports = async (req, res) => {
     }
 
     const listRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/photos?status=eq.pending&select=id,title,description,city,season,price_cents,file_path,media_type,hashtags,social_url&order=created_at.asc`,
+      `${SUPABASE_URL}/rest/v1/photos?status=eq.pending&select=id,title,description,city,season,price_cents,file_path,media_type,hashtags,social_url,user_id,guest_name,photographer_name&order=created_at.asc`,
       {
         headers: {
           apikey: SUPABASE_SERVICE_ROLE_KEY,
@@ -70,13 +57,28 @@ module.exports = async (req, res) => {
     }
 
     const rows = await listRes.json();
-    const pending = rows.map(function (row) {
+    const pending = await Promise.all(rows.map(async (row) => {
+      // Same identity gap as list-pending-chat.js: whoever submitted
+      // this had no visible name, email, or way to tell who they are
+      // from this list alone. guest_name/photographer_name cover
+      // guest-style submissions; email (from auth.users, a separate
+      // table from photos) covers registered contributors.
+      let email = null;
+      if (row.user_id) {
+        try {
+          const userRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${row.user_id}`, {
+            headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` }
+          });
+          if (userRes.ok) { email = (await userRes.json()).email || null; }
+        } catch (e) { /* non-fatal */ }
+      }
       return Object.assign({}, row, {
+        email: email,
         thumbnailUrl: row.file_path
           ? `${SUPABASE_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${row.file_path}`
           : null
       });
-    });
+    }));
 
     res.status(200).json({ ok: true, pending: pending });
   } catch (err) {
