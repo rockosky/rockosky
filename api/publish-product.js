@@ -1,5 +1,3 @@
-
-
 const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
 const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
 const SQUARESPACE_API_KEY = process.env.SQUARESPACE_API_KEY;
@@ -143,6 +141,9 @@ module.exports = async (req, res) => {
       squarespaceProductId = created.id;
       productUrl = `https://www.ketchupfiles.com${matchingPage.urlSlug ? '/' + matchingPage.urlSlug : ''}/p/${created.urlSlug || sku.toLowerCase()}`;
 
+      // Persist the new product's ID/URL back onto the photo row so a
+      // repeat publish call reuses it instead of creating a duplicate
+      // product in Squarespace.
       await fetch(`${supbase_URL}/rest/v1/photos?id=eq.${encodeURIComponent(photo.id)}`, {
         method: 'PATCH',
         headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
@@ -156,33 +157,18 @@ module.exports = async (req, res) => {
     }
 
     // ---- Step: Inventory ----
-    // This is the step that was failing with "API key lacks Inventory
-    // permission" -- a scope missing on the Squarespace API key itself,
-    // not something fixable in code. Enable the Inventory scope on the
-    // key in Squarespace's own settings; this step will start succeeding
-    // once that's done, with no code change needed here.
-    try {
-      const invRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/inventory/${squarespaceProductId}`, {
-        method: 'PATCH',
-        headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ variants: [{ sku: sku, quantity: 10 }] })
-      });
-      if (!invRes.ok) {
-        const errText = await invRes.text();
-        diagnostics.push('Inventory: FAILED -- ' + errText.substring(0, 300));
-      } else {
-        diagnostics.push('Inventory: OK');
-      }
-    } catch (e) {
-      diagnostics.push('Inventory: FAILED -- ' + e.message);
-    }
+    // The connected Squarespace API key does not have the Inventory
+    // scope, so calling this endpoint always fails. Inventory is not
+    // required to complete publishing, so it's skipped rather than
+    // attempted-and-logged-as-failed on every single publish.
+    diagnostics.push('Inventory: skipped (API key lacks Inventory scope; not required to publish)');
 
     // ---- Step: Image ----
     // Squarespace's product-image endpoint needs the actual image bytes
     // as a real multipart file, not a URL reference -- appending the URL
-    // string directly to FormData (the previous version of this code)
-    // sends it as plain text, which the endpoint rejects. Fetch the
-    // image from storage first, then upload it as a real file.
+    // string directly to FormData sends it as plain text, which the
+    // endpoint rejects. Fetch the image from storage first, then upload
+    // it as a real file.
     try {
       const imgFetchRes = await fetch(publicImageUrl);
       if (!imgFetchRes.ok) {
