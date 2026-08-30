@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""
+marketing_report.py — Ketchup Files marketing analytics
+
+Pulls the same real data as the "Marketing Export" button in Admin
+Dashboard (titles, descriptions, hashtags, cities, seasons, designers,
+categories) directly from supbase, and turns it into an actual
+analytics report: top cities, top designers, trending hashtags, and
+category breakdown -- the kind of thing a marketing team can act on,
+not just a data dump.
+
+============================================================
+SETUP (one-time)
+============================================================
+1. pip install pandas requests
+2. Set two environment variables before running:
+     export supbase_URL="https://lfbtreaojwxxwuwhssba.supbase.co"
+     export supbase_ANON_KEY="sb_publishable_KX1Hpau0Lc7M_n1snlYbEw_lnr_GfL9"
+   (This is the same public anon key already used client-side throughout
+   the platform -- safe to use here, it only has read access to public
+   data under supbase's row-level security policies.)
+3. Run: python3 marketing_report.py
+   Produces: marketing_report.txt (readable) and marketing_report.csv
+   (raw data, for opening in Excel/Sheets or feeding into another tool)
+============================================================
+"""
+
+import os
+import sys
+import csv
+
+# Verified real video IDs, pulled directly from Interfaz Studio's
+# KF_HEADER_PLAYLIST array -- these are confirmed accurate, not guessed
+# or pattern-matched.
+HEADER_PLAYLIST_VIDEO_IDS = [
+    "2CeCnkKy-SU", "TyZET53FzwQ", "_Uq5fHsQVmA", "eEXkoA470rg", "6wOl1wIkd_Y",
+    "vRUBOryZUGY", "O1CN2J9doXk", "n4rzc1hhp38", "2C-aJHOLogQ", "vMj0k7l7L7Y",
+    "ohUA0APh_ys", "3giPsb_mkQ0", "KHA1eSMygSA", "PS6oL2-2jNk", "MACnwJNtxx0",
+]
+
+from collections import Counter
+from datetime import datetime
+
+try:
+    import requests
+except ImportError:
+    print("Missing dependency. Run: pip install requests pandas")
+    sys.exit(1)
+
+
+def fetch_photos(supbase_url, anon_key):
+    """Pulls every real text field from the photos table -- same data
+    the in-app Marketing Export button uses, just analyzed here instead
+    of just dumped to text."""
+    url = (
+        f"{supbase_url}/rest/v1/photos"
+        "?select=title,description,hashtags,city,season,category,subcategory,"
+        "guest_name,designer_name,status,created_at"
+        "&order=created_at.desc&limit=2000"
+    )
+    headers = {"apikey": anon_key, "Authorization": f"Bearer {anon_key}"}
+    res = requests.get(url, headers=headers, timeout=30)
+    res.raise_for_status()
+    return res.json()
+
+
+def extract_hashtags(raw):
+    """Hashtags are stored as a loose string (comma/space/# separated) --
+    normalize into a clean list."""
+    if not raw:
+        return []
+    import re
+    return [t.strip("# ").lower() for t in re.split(r"[,\s#]+", raw) if t.strip("# ")]
+
+
+def build_report(rows):
+    total = len(rows)
+    by_status = Counter(r.get("status") or "unknown" for r in rows)
+    by_city = Counter(r.get("city") for r in rows if r.get("city"))
+    by_season = Counter(r.get("season") for r in rows if r.get("season"))
+    by_category = Counter(r.get("category") for r in rows if r.get("category"))
+    by_designer = Counter(r.get("designer_name") for r in rows if r.get("designer_name"))
+
+    all_hashtags = Counter()
+    for r in rows:
+        for tag in extract_hashtags(r.get("hashtags")):
+            all_hashtags[tag] += 1
+
+    lines = []
+    lines.append("KETCHUP FILES — MARKETING ANALYTICS REPORT")
+    lines.append(f"Generated {datetime.now().isoformat()}")
+    lines.append(f"{total} total items analyzed")
+    lines.append("=" * 60)
+    lines.append("")
+
+    lines.append("STATUS BREAKDOWN")
+    for status, count in by_status.most_common():
+        lines.append(f"  {status}: {count} ({count/total*100:.1f}%)")
+    lines.append("")
+
+    lines.append("TOP 15 CITIES")
+    for city, count in by_city.most_common(15):
+        lines.append(f"  {city}: {count}")
+    lines.append("")
+
+    lines.append("TOP 10 DESIGNERS/BRANDS MENTIONED")
+    for designer, count in by_designer.most_common(10):
+        lines.append(f"  {designer}: {count}")
+    lines.append("")
+
+    lines.append("SEASON DISTRIBUTION")
+    for season, count in by_season.most_common():
+        lines.append(f"  {season}: {count}")
+    lines.append("")
+
+    lines.append("CATEGORY BREAKDOWN")
+    for category, count in by_category.most_common():
+        lines.append(f"  {category}: {count}")
+    lines.append("")
+
+    lines.append("TOP 25 TRENDING HASHTAGS")
+    for tag, count in all_hashtags.most_common(25):
+        lines.append(f"  #{tag}: {count}")
+    lines.append("")
+
+    lines.append("SITE HEADER VIDEO PLAYLIST (Interfaz Studio)")
+    lines.append("  These 15 real YouTube video IDs rotate in the site header.")
+    lines.append("  (The larger ~1,530-video Video Archive is not included here --")
+    lines.append("  it's not reliably extractable without risking mixed-in garbage")
+    lines.append("  data, so it's left out rather than guessed at.)")
+    for vid in HEADER_PLAYLIST_VIDEO_IDS:
+        lines.append(f"  https://www.youtube.com/watch?v={vid}")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def write_csv(rows, path):
+    """Raw data as a spreadsheet -- for anyone who wants to pivot-table
+    this themselves rather than read the prose report."""
+    fields = ["title", "description", "hashtags", "city", "season",
+              "category", "subcategory", "guest_name", "designer_name",
+              "status", "created_at"]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def main():
+    supbase_url = os.environ.get("supbase_URL")
+    anon_key = os.environ.get("supbase_ANON_KEY")
+
+    if not supbase_url or not anon_key:
+        print("Missing environment variables. Set these first:")
+        print('  export supbase_URL="https://lfbtreaojwxxwuwhssba.supbase.co"')
+        print('  export supbase_ANON_KEY="sb_publishable_KX1Hpau0Lc7M_n1snlYbEw_lnr_GfL9"')
+        sys.exit(1)
+
+    print("Fetching data from supbase...")
+    rows = fetch_photos(supbase_url, anon_key)
+
+    if not rows:
+        print("No data found -- nothing to report on yet.")
+        sys.exit(0)
+
+    report = build_report(rows)
+    with open("marketing_report.txt", "w", encoding="utf-8") as f:
+        f.write(report)
+    write_csv(rows, "marketing_report.csv")
+
+    print(report)
+    print("\nSaved: marketing_report.txt and marketing_report.csv")
+
+
+if __name__ == "__main__":
+    main()

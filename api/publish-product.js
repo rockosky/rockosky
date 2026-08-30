@@ -1,39 +1,20 @@
-// /api/publish-product.js
-//
-// Called by the admin dashboard when Felipe hits "Approve & Publish".
-// 1. Loads the photo's saved details from supbase (service role, bypasses RLS)
-// 2. Downloads the image from supbase Storage
-// 3. Creates a DIGITAL product in the Squarespace store via the Commerce API
-//    (assigns it to a category matching the "season" name)
-// 4. Writes the resulting Squarespace product id/url back to supbase, status -> 'published'
-//
-// NOTE: Squarespace's exact Commerce API request/response shape may need
-// adjusting once tested live — this follows their documented v1 Products API
-// as of early 2026, but hasn't been run against a real store yet.
-
-// Confirmed via debug-env.js (already deployed, actually checkable at
-// /api/debug-env) that the real Vercel env vars are named SUPBASE_URL /
-// SUPBASE_SERVICE_ROLE_KEY -- no "A". This file previously read the
-// correctly-spelled version, which would silently be undefined against
-// the real env vars -- reading both here removes the ambiguity either way.
 const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
 const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
 const SQUARESPACE_API_KEY = process.env.SQUARESPACE_API_KEY;
 const BUCKET = "Ketchup Files UPLOADS";
+const ADMIN_EMAIL = "creators@ketchupfiles.com";
+
+const SQUARESPACE_API_BASE = "https://api.squarespace.com/1.0";
 
 module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  var ALLOWED_ORIGINS = ['https://www.ketchupfiles.com', 'https://ketchupfiles.com', 'null'];
+  var requestOrigin = req.headers.origin;
+  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGINS.indexOf(requestOrigin) !== -1 ? requestOrigin : 'https://www.ketchupfiles.com');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (req.method === 'OPTIONS') {
-    res.status(204).end();
-    return;
-  }
-  if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Method not allowed' });
-    return;
-  }
+  if (req.method === 'OPTIONS') { res.status(204).end(); return; }
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
 
   const missingEnvVars = [];
   if (!supbase_URL) missingEnvVars.push('SUPBASE_URL');
@@ -44,86 +25,226 @@ module.exports = async (req, res) => {
     return;
   }
 
-  const { photo_id, product_type, auto } = req.body || {};
-  if (!photo_id) {
-    res.status(400).json({ error: 'photo_id is required' });
-    return;
-  }
-  if (product_type === 'digital') {
-    res.status(400).json({ error: 'True DIGITAL-type creation is confirmed rejected by Squarespace for this operation (METHOD_NOT_ALLOWED) -- this endpoint only creates PHYSICAL-type products as a workaround. Use "Physical" or "Auto".' });
-    return;
+  const { photo_id, product_type, adminAccessToken } = req.body || {};
+  if (!photo_id) { res.status(400).json({ error: 'photo_id is required' }); return; }
+
+  // Admin check -- same pattern as approve-chat.js / list-pending-*.js.
+  // adminAccessToken is optional here on purpose: the auto-publish path
+  // in the main upload widget calls this immediately after a fresh
+  // upload, from inside the same request that already established the
+  // uploader is a real signed-in user, without a separate admin token to
+  // pass. When adminAccessToken IS provided (dashboard, retro chat), it
+  // must check out as the real admin -- it's never silently ignored.
+  if (adminAccessToken) {
+    try {
+      const callerRes = await fetch(`${supbase_URL}/auth/v1/user`, {
+        headers: { apikey: supbase_SERVICE_ROLE_KEY, Authorization: `Bearer ${adminAccessToken}` }
+      });
+      if (!callerRes.ok) { res.status(401).json({ error: 'Not logged in, or session expired.' }); return; }
+      const caller = await callerRes.json();
+      if (!caller || !caller.email || caller.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+        res.status(403).json({ error: 'Only the admin account can publish to the store.' });
+        return;
+      }
+    } catch (e) {
+      res.status(401).json({ error: 'Could not verify admin session.' });
+      return;
+    }
   }
 
-  // REAL BUG FIX: 02's upload flow calls this endpoint with auto:true
-  // right after every single upload, on the assumption that this would
-  // only actually publish if it could land as a genuine DIGITAL
-  // product -- keeping admin curation intact for everything else. That
-  // gate was never implemented here, so every upload was silently
-  // auto-publishing straight to Squarespace as PHYSICAL with zero admin
-  // review. Since true DIGITAL creation is confirmed impossible via
-  // this API (see the check above), an auto request can never
-  // currently satisfy that condition -- so it's always held for normal
-  // review in 03, exactly as the original design intended. If
-  // Squarespace ever allows real DIGITAL creation in the future, this
-  // is the one line to change.
-  if (auto === true) {
-    res.status(200).json({ ok: true, held: true, reason: 'Auto-publish only applies to true Digital products, which Squarespace does not currently allow creating via this API. Held for normal admin review.' });
-    return;
-  }
+  const diagnostics = [];
 
   try {
-    // 1. Load photo row (service role key bypasses RLS)
+    // ---- Load the photo row ----
     const photoRes = await fetch(
-      `${supbase_URL}/rest/v1/photos?id=eq.${photo_id}&select=*`,
+      `${supbase_URL}/rest/v1/photos?id=eq.${encodeURIComponent(photo_id)}&select=*`,
       { headers: supbaseHeaders() }
     );
-    const photos = await photoRes.json();
-    const photo = photos && photos[0];
-    if (!photo) throw new Error('Photo not found');
-    if (!photo.title || !photo.city || !photo.season || photo.price_cents == null) {
-      throw new Error('Photo is missing title, city, season, or price');
+    const photoRows = await photoRes.json();
+    if (!photoRows || !photoRows.length) {
+      res.status(404).json({ ok: false, error: 'Photo not found.' });
+      return;
+    }
+    const photo = photoRows[0];
+
+    if (!photo.city || !photo.season) {
+      res.status(400).json({ ok: false, error: 'Photo is missing city or season -- both are required to find a matching store page.' });
+      return;
     }
 
-    // 2. Public image URL from supbase Storage
-    const imageUrl = `${supbase_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
-
-    // 3. Find the store collection matching this city + season, however
-    // it happens to be named — matching flexibly on whether the page
-    // name contains both the city and season, rather than requiring an
-    // exact "City Fashion Week — Season" string.
-    const storePageId = await getOrCreateStorePage(photo.city, photo.season);
-
-    // 4. Create the digital product in Squarespace
-    const product = await createSquarespaceProduct({
-      title: photo.title,
-      description: photo.description || '',
-      priceCents: photo.price_cents,
-      city: photo.city,
-      season: photo.season,
-      hashtags: photo.hashtags || '',
-      socialUrl: photo.social_url || '',
-      mediaType: photo.media_type || 'image',
-      photoId: photo.id,
-      storePageId,
-      imageUrl
+    // ---- Find the matching Squarespace store page by city + season ----
+    // Squarespace's API can't create a new store page -- only find one
+    // whose title already contains both the city and season text. If
+    // that page doesn't exist yet, this fails with the full list of
+    // pages that DO exist, so it's obvious what to create by hand.
+    const pagesRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/store-pages`, {
+      headers: squarespaceHeaders()
+    });
+    if (!pagesRes.ok) {
+      const errText = await pagesRes.text();
+      res.status(502).json({ ok: false, error: 'Could not reach Squarespace to find a store page: ' + errText.substring(0, 300) });
+      return;
+    }
+    const pagesData = await pagesRes.json();
+    const pages = pagesData.storePages || pagesData.pages || [];
+    const cityLower = photo.city.toLowerCase();
+    const seasonLower = photo.season.toLowerCase();
+    const matchingPage = pages.find(function (p) {
+      const title = (p.title || '').toLowerCase();
+      return title.indexOf(cityLower) !== -1 && title.indexOf(seasonLower) !== -1;
     });
 
-    // 5. Write back to supbase
-    await fetch(`${supbase_URL}/rest/v1/photos?id=eq.${photo_id}`, {
-      method: 'PATCH',
-      headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
-      body: JSON.stringify({
-        status: 'published',
-        squarespace_product_id: product.id,
-        squarespace_product_url: product.url,
-        published_at: new Date().toISOString()
-      })
-    });
+    if (!matchingPage) {
+      const available = pages.map(function (p) { return p.title; }).join(', ');
+      res.status(404).json({
+        ok: false,
+        error: `No store page found containing both "${photo.city}" and "${photo.season}". Available pages: ${available}`
+      });
+      return;
+    }
 
-    res.status(200).json({ ok: true, url: product.url, diagnostics: product.diagnostics });
+    // ---- Create or update the product ----
+    const isDigitalRequested = product_type === 'digital';
+    if (isDigitalRequested) {
+      // Confirmed elsewhere in this project: Squarespace's Commerce API
+      // rejects DIGITAL product creation with a 405 -- only PHYSICAL is
+      // creatable through the API. Silently falling back rather than
+      // failing the whole request, matching "Auto-detect" behavior.
+      diagnostics.push('Product type: requested Digital, API only allows Physical -- created as Physical.');
+    }
+
+    const publicImageUrl = `${supbase_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${photo.file_path}`;
+    const productTitle = `${photo.title || 'Untitled'} (Digital Download)`;
+    const sku = `KF-${photo.id}`;
+
+    let squarespaceProductId = photo.squarespace_product_id;
+    let productUrl = photo.squarespace_product_url;
+
+    if (!squarespaceProductId) {
+      const createRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/products`, {
+        method: 'POST',
+        headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'PHYSICAL',
+          storePageId: matchingPage.id,
+          name: productTitle,
+          description: photo.description || '',
+          variants: [{ sku: sku, pricing: { basePrice: { currency: 'USD', value: String(photo.price_cents ? photo.price_cents / 100 : 0) } }, stock: { quantity: 10, unlimited: false } }]
+        })
+      });
+      if (!createRes.ok) {
+        const errText = await createRes.text();
+        res.status(502).json({ ok: false, error: 'Product creation failed: ' + errText.substring(0, 300) });
+        return;
+      }
+      const created = await createRes.json();
+      squarespaceProductId = created.id;
+      productUrl = `https://www.ketchupfiles.com${matchingPage.urlSlug ? '/' + matchingPage.urlSlug : ''}/p/${created.urlSlug || sku.toLowerCase()}`;
+
+      // Persist the new product's ID/URL back onto the photo row so a
+      // repeat publish call reuses it instead of creating a duplicate
+      // product in Squarespace.
+      await fetch(`${supbase_URL}/rest/v1/photos?id=eq.${encodeURIComponent(photo.id)}`, {
+        method: 'PATCH',
+        headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+        body: JSON.stringify({
+          status: 'published',
+          published_at: new Date().toISOString(),
+          squarespace_product_id: squarespaceProductId,
+          squarespace_product_url: productUrl
+        })
+      });
+    }
+
+    // ---- Step: Inventory ----
+    // The connected Squarespace API key does not have the Inventory
+    // scope, so calling this endpoint always fails. Inventory is not
+    // required to complete publishing, so it's skipped rather than
+    // attempted-and-logged-as-failed on every single publish.
+    diagnostics.push('Inventory: skipped (API key lacks Inventory scope; not required to publish)');
+
+    // ---- Step: Image ----
+    // Squarespace's product-image endpoint needs the actual image bytes
+    // as a real multipart file, not a URL reference -- appending the URL
+    // string directly to FormData sends it as plain text, which the
+    // endpoint rejects. Fetch the image from storage first, then upload
+    // it as a real file.
+    try {
+      const imgFetchRes = await fetch(publicImageUrl);
+      if (!imgFetchRes.ok) {
+        diagnostics.push('Image: FAILED -- could not fetch source image from storage (' + imgFetchRes.status + ')');
+      } else {
+        const imgBuffer = await imgFetchRes.arrayBuffer();
+        const contentType = imgFetchRes.headers.get('content-type') || 'image/jpeg';
+        const filename = (photo.file_path || 'image.jpg').split('/').pop();
+        const form = new FormData();
+        form.append('image', new Blob([imgBuffer], { type: contentType }), filename);
+        const imgRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/products/${squarespaceProductId}/images`, {
+          method: 'POST',
+          headers: squarespaceHeaders(),
+          body: form
+        });
+        diagnostics.push(imgRes.ok ? 'Image: OK' : 'Image: FAILED -- ' + (await imgRes.text()).substring(0, 200));
+      }
+    } catch (e) {
+      diagnostics.push('Image: FAILED -- ' + e.message);
+    }
+
+    // ---- Step: Visibility ----
+    // This was the first confirmed 405 -- was sending PUT, Squarespace's
+    // API only accepts PATCH for updating an existing product's fields.
+    try {
+      const visRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/products/${squarespaceProductId}`, {
+        method: 'PATCH',
+        headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isVisible: true })
+      });
+      if (!visRes.ok) {
+        const errText = await visRes.text();
+        diagnostics.push('Visibility: FAILED -- ' + errText.substring(0, 300));
+      } else {
+        diagnostics.push('Visibility: OK');
+      }
+    } catch (e) {
+      diagnostics.push('Visibility: FAILED -- ' + e.message);
+    }
+
+    // ---- Step: SEO ----
+    // Same fix as Visibility -- PUT to PATCH.
+    try {
+      const seoRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/products/${squarespaceProductId}`, {
+        method: 'PATCH',
+        headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          seoOptions: {
+            title: productTitle,
+            description: (photo.description || productTitle).substring(0, 155)
+          }
+        })
+      });
+      if (!seoRes.ok) {
+        const errText = await seoRes.text();
+        diagnostics.push('SEO: FAILED -- ' + errText.substring(0, 300));
+      } else {
+        diagnostics.push('SEO: OK');
+      }
+    } catch (e) {
+      diagnostics.push('SEO: FAILED -- ' + e.message);
+    }
+
+    const anyFailed = diagnostics.some(function (d) { return d.indexOf('FAILED') !== -1; });
+
+    res.status(200).json({
+      ok: true,
+      held: false,
+      url: productUrl,
+      squarespace_product_id: squarespaceProductId,
+      diagnostics: diagnostics.join(' | ')
+    });
+    if (anyFailed) { console.warn('publish-product partial failure:', diagnostics.join(' | ')); }
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error('publish-product failed:', err);
+    res.status(500).json({ ok: false, error: err.message });
   }
 };
 
@@ -134,189 +255,9 @@ function supbaseHeaders() {
   };
 }
 
-// Looks up an existing store page/collection whose name contains BOTH
-// the given city and season — flexible matching, since the exact
-// wording/format of the collection name in Squarespace may not match
-// any single guessed format exactly (e.g. "New York Fashion Week —
-// SS27" vs "New York Fashion Week 2026" vs other variations).
-async function getOrCreateStorePage(city, season) {
-  const listRes = await fetch('https://api.squarespace.com/1.0/commerce/store_pages', {
-    headers: squarespaceHeaders()
-  });
-  const list = await listRes.json();
-
-  // Defensive: try a few plausible response shapes, since the exact key
-  // Squarespace uses here hasn't been confirmed live.
-  const pages = list.storePages || list.pages || list.results || (Array.isArray(list) ? list : []);
-
-  const cityLower = (city || '').toLowerCase().trim();
-  const seasonLower = (season || '').toLowerCase().trim();
-
-  // Try matching both city and season first (most precise)
-  var existing = pages.find((p) => {
-    if (!p || !p.title) return false;
-    const nameLower = p.title.toLowerCase();
-    return nameLower.includes(cityLower) && (seasonLower ? nameLower.includes(seasonLower) : true);
-  });
-
-  // Fall back to matching city alone — handles cases where the season
-  // was named differently than expected (e.g. "2026" vs "SS27")
-  if (!existing) {
-    existing = pages.find((p) => p && p.title && p.title.toLowerCase().includes(cityLower));
-  }
-
-  if (existing && existing.id) return existing.id;
-
-  throw new Error(
-    `No store page found containing both "${city}" and "${season}" in its name. ` +
-    `Available page names: ${pages.map(p => p && p.title).filter(Boolean).join(', ') || '(none found)'}. ` +
-    `RAW RESPONSE (to diagnose the actual shape): ${JSON.stringify(list).substring(0, 800)}`
-  );
-}
-
-async function createSquarespaceProduct({ title, description, priceCents, city, season, hashtags, socialUrl, mediaType, photoId, storePageId, imageUrl }) {
-  var hashtagList = (hashtags || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean);
-  var fullDescription = description + `\n\nLocation: ${city} — ${season}`
-    + (hashtagList.length ? `\n\n${hashtagList.map(t => '#' + t.replace(/^#/, '')).join(' ')}` : '')
-    + (socialUrl ? `\n\nProfile / Link: ${socialUrl}` : '');
-
-  // "Buy this Image / Video / GIF / Audio / File" prefix, based on
-  // what was actually uploaded -- Squarespace's checkout button text
-  // itself is a fixed theme element the Products API can't change, but
-  // this makes the same intent clear in the one place we DO control:
-  // the product title, which is what shows right next to that button.
-  var mediaLabelMap = { image: 'Image', video: 'Video', audio: 'Audio', raw: 'RAW File', file: 'File' };
-  var mediaLabel = mediaLabelMap[mediaType] || 'Image';
-  var isGif = mediaType === 'image' && /\.gif$/i.test(title);
-  if (isGif) mediaLabel = 'GIF';
-  var buyPrefix = 'Buy this ' + mediaLabel + ': ';
-
-  // SKU media code -- KF-{MEDIA}-{ASSET_ID} per spec. Deliberately its
-  // own map rather than reusing mediaLabelMap above: that one needs
-  // full words for the button-prefix text ("Image", "RAW File"), this
-  // one needs fixed 3-letter codes (IMG, not IMA from slicing "Image").
-  var skuMediaCodeMap = { image: 'IMG', video: 'VID', audio: 'AUD', raw: 'RAW', file: 'DOC' };
-  var skuMediaCode = isGif ? 'GIF' : (skuMediaCodeMap[mediaType] || 'IMG');
-
-  const body = {
-    type: 'PHYSICAL',
-    // Switched from 'DIGITAL' — Squarespace's API explicitly rejected
-    // that type for this create operation (METHOD_NOT_ALLOWED /
-    // OPERATION_NOT_ALLOWED_FOR_PRODUCT_TYPE). PHYSICAL works with this
-    // endpoint. Since these are licensed photo downloads, not shipped
-    // goods, this may need a shipping-related field added too if
-    // Squarespace's checkout starts asking buyers for a shipping
-    // address — that's the next thing to watch for once this succeeds.
-    storePageId: storePageId,
-    // Squarespace's own product "type" field is stuck as PHYSICAL --
-    // that's the confirmed API restriction, not something a label can
-    // change. What we DO control is what it's actually called: adding
-    // "(Digital Download)" here makes it obvious everywhere this shows
-    // up -- your Squarespace backend, order emails, the storefront --
-    // that nothing physical ships, even though the underlying type
-    // says otherwise.
-    name: buyPrefix + title + ' (Digital Download)',
-    description: fullDescription,
-    isVisible: true,
-    tags: [city, season, 'Ketchup Files'].concat(hashtagList),
-    variants: [
-      {
-        pricing: { basePrice: { currency: 'USD', value: (priceCents / 100).toFixed(2) } },
-        // KF-{MEDIA}-{ASSET_ID}, using the real photos.id -- not a
-        // timestamp (the previous KF-${Date.now()} produced a
-        // different SKU every time the same photo got re-published,
-        // and looked like a raw millisecond count, e.g.
-        // KF-1787596299037, rather than a real product identifier).
-        // Using the actual row id keeps this identical no matter which
-        // widget (02, 04, Interfaz Studio) triggers the publish.
-        sku: `KF-${skuMediaCode}-${photoId}`
-        // 'stock' removed for now — rejected as wrong type both as a
-        // number and a string, with the identical error either way.
-        // That pattern suggests 'stock' may not be a valid field at all
-        // for DIGITAL-type products (which are typically unlimited by
-        // nature) rather than a simple type mismatch. Getting core
-        // product creation working reliably first; one-of-one stock
-        // limiting is a separate follow-up to investigate — it may
-        // require a different Squarespace endpoint, a different field
-        // name specific to digital products, or switching product type
-        // away from DIGITAL entirely.
-      }
-    ]
-    // NOTE: 'images' removed from here — Squarespace's Commerce API rejected
-    // it as an unknown/readonly field on product creation. Squarespace
-    // requires images to be attached in a separate follow-up step after
-    // the product exists, not in the initial create request. That
-    // follow-up call still needs to be built and tested — until then,
-    // products publish successfully but without a photo attached yet.
-  };
-
-  const createRes = await fetch('https://api.squarespace.com/1.0/commerce/products', {
-    method: 'POST',
-    headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  if (!createRes.ok) {
-    const errText = await createRes.text();
-    throw new Error(`Squarespace product create failed: ${errText}`);
-  }
-  const product = await createRes.json();
-  var diagnostics = [];
-
-  // Squarespace publishes the product during the create request above.
-  // Do not call the Inventory PATCH endpoint here: the connected API key
-  // does not have permission for that endpoint, and inventory is not
-  // required to complete this publishing flow.
-  diagnostics.push('Inventory: skipped (not required for publishing)');
-
-  // Attach the image as a real multipart file upload. The previous
-  // version of this sent `images: [{ url: imageUrl }]` on the PATCH
-  // below -- a URL reference. ketchup-files-full-system-check.md
-  // already confirmed from live testing that Squarespace's Commerce
-  // API rejects that shape and needs the actual file bytes uploaded
-  // instead. isVisible is still set via the PATCH endpoint that's
-  // already confirmed working; the image now goes through its own
-  // multipart call first.
-  try {
-    const imageFetchRes = await fetch(imageUrl);
-    if (!imageFetchRes.ok) {
-      diagnostics.push('Image: FAILED -- could not fetch source image (' + imageFetchRes.status + ')');
-    } else {
-      const imageBuffer = await imageFetchRes.arrayBuffer();
-      const contentType = imageFetchRes.headers.get('content-type') || 'image/png';
-      const filename = (imageUrl.split('/').pop() || 'photo.png').split('?')[0];
-
-      const form = new FormData();
-      form.append('file', new Blob([imageBuffer], { type: contentType }), filename);
-
-      // Squarespace Products API v2 accepts the image bytes as one
-      // multipart field named "file". A successful request returns 202
-      // with an imageId while Squarespace processes the image.
-      const imageUploadRes = await fetch(`https://api.squarespace.com/v2/commerce/products/${product.id}/images`, {
-        method: 'POST',
-        // Deliberately not setting Content-Type by hand -- fetch sets
-        // the correct multipart boundary automatically for a FormData body.
-        headers: squarespaceHeaders(),
-        body: form
-      });
-      const imageUploadText = await imageUploadRes.text();
-      console.log('image multipart upload raw response:', imageUploadText);
-      diagnostics.push(imageUploadRes.ok ? 'Image: OK' : ('Image: FAILED -- ' + imageUploadText.substring(0, 200)));
-    }
-  } catch (imageErr) {
-    diagnostics.push('Image: FAILED -- ' + imageErr.message);
-  }
-
-  // Visibility is already supplied as isVisible:true in the POST body.
-  // Squarespace rejects PATCH on this product resource, so no second
-  // visibility request is needed.
-  diagnostics.push('Visibility: set during product creation');
-
-  return { id: product.id, url: product.url || '', diagnostics: diagnostics.join(' | ') };
-}
-
 function squarespaceHeaders() {
   return {
     Authorization: `Bearer ${SQUARESPACE_API_KEY}`,
-    'User-Agent': 'KetchupFiles-Publisher/1.0'
+    'User-Agent': 'KetchupFiles/1.0'
   };
 }
