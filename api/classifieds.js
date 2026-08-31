@@ -19,7 +19,7 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === 'GET') {
-      const { id, category, min, max, condition, q, city } = req.query;
+      const { id, category, min, max, condition, q, city, status } = req.query;
 
       if (id) {
         const { data: listing, error } = await supabase
@@ -54,8 +54,8 @@ export default async function handler(req, res) {
 
       let query = supabase
         .from('classifieds_listings')
-        .select('id, title, price_cents, category, condition, photos, location_city, location_state, created_at')
-        .eq('status', 'active')
+        .select('id, user_id, title, price_cents, category, condition, photos, location_city, location_state, created_at, status, creator_profiles(display_name, username)')
+        .eq('status', status || 'active')
         .order('created_at', { ascending: false });
 
       if (category) query = query.eq('category', category);
@@ -80,7 +80,8 @@ export default async function handler(req, res) {
           user_id, title, description: description || null,
           price_cents: Math.round((parseFloat(price) || 0) * 100),
           category: category || null, condition: condition || null,
-          photos: photos || [], location_city: location_city || null, location_state: location_state || null
+          photos: photos || [], location_city: location_city || null, location_state: location_state || null,
+          status: 'pending'
         }])
         .select();
       if (error) throw error;
@@ -89,7 +90,7 @@ export default async function handler(req, res) {
 
     if (req.method === 'PATCH') {
       const { id, user_id, status } = req.body;
-      const VALID = ['active', 'sold', 'removed'];
+      const VALID = ['pending', 'active', 'sold', 'removed', 'rejected'];
       if (!id || !status || !VALID.includes(status)) {
         return res.status(400).json({ error: `id and status (one of ${VALID.join(', ')}) are required` });
       }
