@@ -16,7 +16,7 @@ export default async function handler(req, res) {
       const { status } = req.query;
       let query = supabase
         .from('job_postings')
-        .select('*, job_claims(contributor_id, status)')
+        .select('*, job_claims(contributor_id, status, creator_profiles(display_name, username, profile_photo_url))')
         .order('created_at', { ascending: false });
 
       if (status) query = query.eq('status', status);
