@@ -1,4 +1,4 @@
-// vercel-publish-fawn.vercel.app/api/job-postings
+// rockosky.vercel.app/api/job-postings
 // GET: list open jobs (public, for contributors)
 // POST: create a new job posting (admin)
 // PATCH: update a posting's status, or claim a job (?action=claim)
