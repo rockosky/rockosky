@@ -14,6 +14,17 @@ const BUCKET = "Ketchup Files UPLOADS";
 const THUMBS_PER_CONTRIBUTOR = 4;
 
 export default async function handler(req, res) {
+  // Allow calls from Squarespace / Interfaz Studio, which run on a
+  // different origin than this API — without these headers, browsers
+  // silently block the fetch() call even though the endpoint itself
+  // works fine when visited directly.
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, PATCH, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   try {
     if (req.method === 'PATCH') {
       const { user_id, roster_status, chat_approved } = req.body;
