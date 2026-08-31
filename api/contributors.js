@@ -1,5 +1,7 @@
 // vercel-publish-fawn.vercel.app/api/contributors
-// GET: list contributors from creator_profiles (for the assignments dashboard)
+// GET: list contributors from creator_profiles, each with a few recent
+// approved/published photos so the assignments dashboard can show a
+// real portfolio thumbnail strip instead of a bare name list.
 
 import { createClient } from '@supabase/supabase-js';
 
@@ -7,6 +9,9 @@ const supabase = createClient(
   process.env.SUPBASE_URL,
   process.env.SUPBASE_SERVICE_ROLE_KEY
 );
+
+const BUCKET = "Ketchup Files UPLOADS";
+const THUMBS_PER_CONTRIBUTOR = 4;
 
 export default async function handler(req, res) {
   try {
@@ -18,15 +23,42 @@ export default async function handler(req, res) {
     const { status } = req.query;
     let query = supabase
       .from('creator_profiles')
-      .select('user_id, display_name, username, roster_status, contributor_type, roster_city, chat_approved')
+      .select('user_id, display_name, username, roster_status, contributor_type, roster_city, chat_approved, profile_photo_url')
       .order('display_name', { ascending: true });
 
     if (status) query = query.eq('roster_status', status);
 
-    const { data, error } = await query;
+    const { data: contributors, error } = await query;
     if (error) throw error;
 
-    return res.status(200).json({ contributors: data });
+    const userIds = contributors.map(c => c.user_id).filter(Boolean);
+    let photosByUser = {};
+
+    if (userIds.length) {
+      const { data: photos, error: photosError } = await supabase
+        .from('photos')
+        .select('user_id, file_path, title, media_type, created_at')
+        .in('user_id', userIds)
+        .in('status', ['approved', 'published'])
+        .order('created_at', { ascending: false });
+
+      if (photosError) throw photosError;
+
+      (photos || []).forEach(p => {
+        if (!photosByUser[p.user_id]) photosByUser[p.user_id] = [];
+        if (photosByUser[p.user_id].length >= THUMBS_PER_CONTRIBUTOR) return;
+        const publicUrl = supabase.storage.from(BUCKET).getPublicUrl(p.file_path).data.publicUrl;
+        photosByUser[p.user_id].push({ url: publicUrl, title: p.title, media_type: p.media_type });
+      });
+    }
+
+    const enriched = contributors.map(c => ({
+      ...c,
+      photos: photosByUser[c.user_id] || [],
+      photo_count: (photosByUser[c.user_id] || []).length
+    }));
+
+    return res.status(200).json({ contributors: enriched });
   } catch (err) {
     console.error('contributors error:', err);
     return res.status(500).json({ error: err.message });
