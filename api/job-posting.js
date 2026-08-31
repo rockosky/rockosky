@@ -28,13 +28,13 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'POST') {
-      const { title, description, event, city, role_needed, spots_available, call_time, location, pay_notes, posted_by } = req.body;
+      const { title, description, event, city, role_needed, spots_available, call_time, location, pay_notes, posted_by, cover_image_url } = req.body;
 
       if (!title) return res.status(400).json({ error: 'title is required' });
 
       const { data, error } = await supabase
         .from('job_postings')
-        .insert([{ title, description, event, city, role_needed, spots_available, call_time, location, pay_notes, posted_by }])
+        .insert([{ title, description, event, city, role_needed, spots_available, call_time, location, pay_notes, posted_by, cover_image_url }])
         .select();
 
       if (error) throw error;
