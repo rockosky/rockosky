@@ -1,4 +1,4 @@
-// vercel-publish-fawn.vercel.app/api/contributors
+// rockosky.vercel.app/api/contributors
 // GET: list contributors from creator_profiles, each with a few recent
 // approved/published photos so the assignments dashboard can show a
 // real portfolio thumbnail strip instead of a bare name list.
