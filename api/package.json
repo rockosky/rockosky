@@ -4,6 +4,7 @@
   "private": true,
   "dependencies": {
     "nodemailer": "^6.9.13",
-    "@supabase/supabase-js": "^2.39.0"
+    "@supabase/supabase-js": "^2.39.0",
+    "stripe": "^14.25.0"
   }
 }
