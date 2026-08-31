@@ -1,4 +1,4 @@
-// vercel-publish-fawn.vercel.app/api/assign-job
+// rockosky.vercel.app/api/assign-job
 // Handles: GET (list assignments), POST (create), PATCH (update status)
 
 import { createClient } from '@supabase/supabase-js';
@@ -9,6 +9,13 @@ const supabase = createClient(
 );
 
 export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   try {
     if (req.method === 'GET') {
       const { contributor_id, status } = req.query;
