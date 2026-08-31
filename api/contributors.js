@@ -16,19 +16,26 @@ const THUMBS_PER_CONTRIBUTOR = 4;
 export default async function handler(req, res) {
   try {
     if (req.method === 'PATCH') {
-      const { user_id, roster_status } = req.body;
+      const { user_id, roster_status, chat_approved } = req.body;
       const VALID_STATUSES = ['pending', 'active', 'inactive', 'alumni'];
 
-      if (!user_id || !roster_status) {
-        return res.status(400).json({ error: 'user_id and roster_status are required' });
+      if (!user_id) {
+        return res.status(400).json({ error: 'user_id is required' });
       }
-      if (!VALID_STATUSES.includes(roster_status)) {
+      if (roster_status === undefined && chat_approved === undefined) {
+        return res.status(400).json({ error: 'provide roster_status and/or chat_approved to update' });
+      }
+      if (roster_status !== undefined && !VALID_STATUSES.includes(roster_status)) {
         return res.status(400).json({ error: `roster_status must be one of: ${VALID_STATUSES.join(', ')}` });
       }
 
+      const updates = {};
+      if (roster_status !== undefined) updates.roster_status = roster_status;
+      if (chat_approved !== undefined) updates.chat_approved = !!chat_approved;
+
       const { data, error } = await supabase
         .from('creator_profiles')
-        .update({ roster_status })
+        .update(updates)
         .eq('user_id', user_id)
         .select();
 
