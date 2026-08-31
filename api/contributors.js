@@ -15,8 +15,30 @@ const THUMBS_PER_CONTRIBUTOR = 4;
 
 export default async function handler(req, res) {
   try {
+    if (req.method === 'PATCH') {
+      const { user_id, roster_status } = req.body;
+      const VALID_STATUSES = ['pending', 'active', 'inactive', 'alumni'];
+
+      if (!user_id || !roster_status) {
+        return res.status(400).json({ error: 'user_id and roster_status are required' });
+      }
+      if (!VALID_STATUSES.includes(roster_status)) {
+        return res.status(400).json({ error: `roster_status must be one of: ${VALID_STATUSES.join(', ')}` });
+      }
+
+      const { data, error } = await supabase
+        .from('creator_profiles')
+        .update({ roster_status })
+        .eq('user_id', user_id)
+        .select();
+
+      if (error) throw error;
+      if (!data || !data.length) return res.status(404).json({ error: 'Contributor not found' });
+      return res.status(200).json({ contributor: data[0] });
+    }
+
     if (req.method !== 'GET') {
-      res.setHeader('Allow', ['GET']);
+      res.setHeader('Allow', ['GET', 'PATCH']);
       return res.status(405).json({ error: `Method ${req.method} not allowed` });
     }
 
