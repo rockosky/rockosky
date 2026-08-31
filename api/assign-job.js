@@ -13,7 +13,7 @@ export default async function handler(req, res) {
       const { contributor_id, status } = req.query;
       let query = supabase
         .from('assignments')
-        .select('*, creator_profiles(id, full_name, contributor_type, home_city)')
+        .select('*, creator_profiles(user_id, display_name, contributor_type, home_city)')
         .order('call_time', { ascending: true });
 
       if (contributor_id) query = query.eq('contributor_id', contributor_id);
