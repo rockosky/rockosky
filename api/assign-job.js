@@ -1,4 +1,5 @@
-
+// vercel-publish-fawn.vercel.app/api/assign-job
+// Handles: GET (list assignments), POST (create), PATCH (update status)
 
 import { createClient } from '@supabase/supabase-js';
 
