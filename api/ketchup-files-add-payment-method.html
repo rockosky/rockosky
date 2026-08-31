@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Add payment method — Ketchup Files</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+:root{
+  --bg:#000000; --ink:#ffffff; --mute:#a8a8a8; --red:#e2231a; --line:#ffffff22;
+}
+*{box-sizing:border-box;}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font-family:"Inter", -apple-system, sans-serif;
+  min-height:100vh; display:flex; align-items:center; justify-content:center;
+  padding:24px;
+}
+.card{
+  width:100%; max-width:420px;
+  border:1px solid var(--line); padding:32px;
+}
+h1{ font-size:20px; margin:0 0 8px; }
+.sub{ font-size:13px; color:var(--mute); margin:0 0 28px; }
+#card-element{
+  padding:14px; border:1px solid var(--line); background:#0a0a0a; margin-bottom:16px;
+}
+#card-errors{ font-size:13px; color:var(--red); min-height:18px; margin-bottom:16px; }
+button{
+  width:100%; padding:14px; background:var(--ink); color:#000000; border:none;
+  font-size:12px; font-weight:700; letter-spacing:1px; text-transform:uppercase;
+  cursor:pointer;
+}
+button:hover{ background:var(--red); color:var(--ink); }
+button:disabled{ opacity:0.5; cursor:not-allowed; }
+#status{ font-size:13px; color:var(--mute); margin-top:16px; text-align:center; }
+</style>
+<script src="https://js.stripe.com/v3/"></script>
+</head>
+<body>
+
+<div class="card">
+  <h1>Add a payment method</h1>
+  <p class="sub">Saved securely with Stripe. Ketchup Files never sees or stores your card number.</p>
+  <div id="card-element"></div>
+  <div id="card-errors"></div>
+  <button id="submit-btn">Save card</button>
+  <p id="status"></p>
+</div>
+
+<script>
+  // Replace with your real Stripe PUBLISHABLE key (pk_live_... or pk_test_...)
+  // -- this one is safe to put directly in client-side code, unlike the secret key.
+  var STRIPE_PUBLISHABLE_KEY = "REPLACE_WITH_YOUR_PUBLISHABLE_KEY";
+
+  var stripe = Stripe(STRIPE_PUBLISHABLE_KEY);
+  var elements = stripe.elements();
+  var cardElement = elements.create("card", {
+    style: {
+      base: { color: "#ffffff", fontSize: "15px", "::placeholder": { color: "#a8a8a8" } },
+      invalid: { color: "#e2231a" }
+    }
+  });
+  cardElement.mount("#card-element");
+
+  cardElement.on("change", function (event) {
+    document.getElementById("card-errors").textContent = event.error ? event.error.message : "";
+  });
+
+  // These need to come from your actual signed-in session -- pull them
+  // from wherever the app already tracks the current user (same pattern
+  // as currentUser.id / currentUser.email elsewhere in the retro chat app).
+  function getCurrentBuyer() {
+    var params = new URLSearchParams(window.location.search);
+    return {
+      id: params.get("buyerId"),
+      email: params.get("email")
+    };
+  }
+
+  document.getElementById("submit-btn").onclick = function () {
+    var buyer = getCurrentBuyer();
+    var statusEl = document.getElementById("status");
+    var errorsEl = document.getElementById("card-errors");
+    var btn = this;
+
+    if (!buyer.id || !buyer.email) {
+      errorsEl.textContent = "Missing buyer info -- sign in first.";
+      return;
+    }
+
+    btn.disabled = true;
+    statusEl.textContent = "Setting up...";
+
+    fetch("https://rockosky.vercel.app/api/create-buyer-setup-intent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ buyerId: buyer.id, email: buyer.email })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) {
+          errorsEl.textContent = data.error || "Could not start card setup.";
+          btn.disabled = false;
+          return;
+        }
+        statusEl.textContent = "Confirming card...";
+        return stripe.confirmCardSetup(data.clientSecret, {
+          payment_method: { card: cardElement }
+        }).then(function (result) {
+          if (result.error) {
+            errorsEl.textContent = result.error.message;
+            btn.disabled = false;
+          } else {
+            statusEl.textContent = "Card saved. You're ready to pay for requests.";
+            btn.style.display = "none";
+          }
+        });
+      })
+      .catch(function () {
+        errorsEl.textContent = "Something went wrong -- try again.";
+        btn.disabled = false;
+      });
+  };
+</script>
+
+</body>
+</html>
