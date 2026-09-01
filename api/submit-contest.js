@@ -1,24 +1,19 @@
-// api/submit-contest.js
-// Step 2 of the submission flow. By the time this is called, the images
-// are already sitting in Supabase Storage (uploaded directly by the
-// browser via signed URLs from contest-upload-url.js). This function
-// only ever receives small JSON — form fields + the resulting image
-// URLs — so it never hits Vercel's request-body limit.
-//
-// Replaces the earlier multipart/formidable version. If that one is
-// still deployed, overwrite it with this — no new dependency needed,
-// you can drop "formidable" from package.json.
+// api/contest-upload-url.js
+// Step 1 of the submission flow. The browser asks for a signed upload
+// slot per file; the actual image bytes then go straight from the
+// browser to Supabase Storage (see 05... in the HTML's JS), never
+// through this function. This is what avoids Vercel's ~4.5MB request
+// body limit — the "file load failed" error.
 
 import { createClient } from '@supabase/supabase-js';
-
-export const config = {
-  api: { bodyParser: true }, // JSON now, not multipart
-};
 
 const supabase = createClient(
   process.env.SUPBASE_URL,
   process.env.SUPBASE_SERVICE_ROLE_KEY
 );
+
+const BUCKET = 'Ketchup Files UPLOADS';
+const MAX_FILES = 5;
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', 'https://www.ketchupfiles.com');
@@ -28,69 +23,29 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const {
-      contest_slug,
-      display_name,
-      instagram_handle,
-      based_in,
-      caption,
-      image_urls,
-    } = req.body || {};
-
-    const contestSlug = String(contest_slug || '').trim();
-    const displayName = String(display_name || '').trim();
-    const instagram = String(instagram_handle || '').trim().replace(/^@/, '');
-    const basedIn = String(based_in || '').trim();
-
-    if (!contestSlug) return res.status(400).json({ error: 'Missing contest.' });
-    if (!displayName) return res.status(400).json({ error: 'Name is required.' });
-    if (!Array.isArray(image_urls) || image_urls.length === 0) {
-      return res.status(400).json({ error: 'At least one image is required.' });
+    const { contest_slug, filenames } = req.body || {};
+    if (!contest_slug || !Array.isArray(filenames) || filenames.length === 0) {
+      return res.status(400).json({ error: 'contest_slug and filenames[] are required.' });
+    }
+    if (filenames.length > MAX_FILES) {
+      return res.status(400).json({ error: `Max ${MAX_FILES} files.` });
     }
 
-    const { data: contest, error: contestErr } = await supabase
-      .from('contests')
-      .select('id, active, ends_at')
-      .eq('slug', contestSlug)
-      .single();
+    const slots = [];
+    for (const name of filenames) {
+      const ext = String(name).split('.').pop().toLowerCase() || 'jpg';
+      const path = `contest/${contest_slug}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
 
-    if (contestErr || !contest || !contest.active) {
-      return res.status(400).json({ error: 'This contest is not currently open.' });
-    }
-    if (contest.ends_at && new Date(contest.ends_at) < new Date()) {
-      return res.status(400).json({ error: 'Submissions are closed.' });
-    }
+      const { data, error } = await supabase.storage.from(BUCKET).createSignedUploadUrl(path);
+      if (error) throw error;
 
-    let userId = null;
-    if (instagram) {
-      const { data: existing } = await supabase
-        .from('creator_profiles')
-        .select('user_id')
-        .eq('instagram_handle', instagram)
-        .maybeSingle();
-      if (existing) userId = existing.user_id;
+      const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(path);
+      slots.push({ path: data.path, token: data.token, publicUrl: pub.publicUrl });
     }
 
-    const { data: submission, error: insertErr } = await supabase
-      .from('contest_submissions')
-      .insert({
-        contest_id: contest.id,
-        user_id: userId,
-        display_name: displayName,
-        instagram_handle: instagram,
-        based_in: basedIn,
-        caption: String(caption || '').trim(),
-        image_urls,
-        status: 'pending',
-      })
-      .select()
-      .single();
-
-    if (insertErr) throw insertErr;
-
-    return res.status(200).json({ success: true, submission_id: submission.id });
+    return res.status(200).json({ slots });
   } catch (err) {
-    console.error('submit-contest error:', err);
-    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
+    console.error('contest-upload-url error:', err);
+    return res.status(500).json({ error: 'Could not prepare upload. Please try again.' });
   }
 }
