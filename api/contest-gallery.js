@@ -1,10 +1,19 @@
-// api/contest-gallery.js
-// Public, read-only. Returns entries an admin has marked "shortlisted"
-// or "winner" for a given contest — this is what the "Featured" section
-// on the contest page reads from. No admin key needed to call this;
-// it only ever exposes fields that are safe to show publicly.
+// api/submit-contest.js
+// Step 2 of the submission flow. By the time this is called, the images
+// are already sitting in Supabase Storage (uploaded directly by the
+// browser via signed URLs from contest-upload-url.js). This function
+// only ever receives small JSON — form fields + the resulting image
+// URLs — so it never hits Vercel's request-body limit.
+//
+// Replaces the earlier multipart/formidable version. If that one is
+// still deployed, overwrite it with this — no new dependency needed,
+// you can drop "formidable" from package.json.
 
 import { createClient } from '@supabase/supabase-js';
+
+export const config = {
+  api: { bodyParser: true }, // JSON now, not multipart
+};
 
 const supabase = createClient(
   process.env.SUPBASE_URL,
@@ -13,32 +22,75 @@ const supabase = createClient(
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', 'https://www.ketchupfiles.com');
-  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-
-  const slug = req.query.slug;
-  if (!slug) return res.status(400).json({ error: 'Missing slug.' });
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { data: contest } = await supabase
+    const {
+      contest_slug,
+      display_name,
+      instagram_handle,
+      based_in,
+      caption,
+      image_urls,
+    } = req.body || {};
+
+    const contestSlug = String(contest_slug || '').trim();
+    const displayName = String(display_name || '').trim();
+    const instagram = String(instagram_handle || '').trim().replace(/^@/, '');
+    const basedIn = String(based_in || '').trim();
+
+    if (!contestSlug) return res.status(400).json({ error: 'Missing contest.' });
+    if (!displayName) return res.status(400).json({ error: 'Name is required.' });
+    if (!Array.isArray(image_urls) || image_urls.length === 0) {
+      return res.status(400).json({ error: 'At least one image is required.' });
+    }
+
+    const { data: contest, error: contestErr } = await supabase
       .from('contests')
-      .select('id')
-      .eq('slug', slug)
+      .select('id, active, ends_at')
+      .eq('slug', contestSlug)
       .single();
 
-    if (!contest) return res.status(404).json({ error: 'Contest not found.' });
+    if (contestErr || !contest || !contest.active) {
+      return res.status(400).json({ error: 'This contest is not currently open.' });
+    }
+    if (contest.ends_at && new Date(contest.ends_at) < new Date()) {
+      return res.status(400).json({ error: 'Submissions are closed.' });
+    }
 
-    const { data, error } = await supabase
+    let userId = null;
+    if (instagram) {
+      const { data: existing } = await supabase
+        .from('creator_profiles')
+        .select('user_id')
+        .eq('instagram_handle', instagram)
+        .maybeSingle();
+      if (existing) userId = existing.user_id;
+    }
+
+    const { data: submission, error: insertErr } = await supabase
       .from('contest_submissions')
-      .select('display_name, instagram_handle, caption, image_urls, status')
-      .eq('contest_id', contest.id)
-      .in('status', ['shortlisted', 'winner'])
-      .order('submitted_at', { ascending: false });
+      .insert({
+        contest_id: contest.id,
+        user_id: userId,
+        display_name: displayName,
+        instagram_handle: instagram,
+        based_in: basedIn,
+        caption: String(caption || '').trim(),
+        image_urls,
+        status: 'pending',
+      })
+      .select()
+      .single();
 
-    if (error) throw error;
+    if (insertErr) throw insertErr;
 
-    return res.status(200).json({ entries: data });
+    return res.status(200).json({ success: true, submission_id: submission.id });
   } catch (err) {
-    console.error('contest-gallery error:', err);
-    return res.status(500).json({ error: 'Could not load gallery.' });
+    console.error('submit-contest error:', err);
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
