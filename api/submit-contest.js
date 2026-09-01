@@ -1,20 +1,18 @@
 // api/submit-contest.js
-// Drop into the ketchup-files-api Vercel project (same one that serves
-// publish-product.js / fulfill-order.js at rockosky.vercel.app).
+// Step 2 of the submission flow. By the time this is called, the images
+// are already sitting in Supabase Storage (uploaded directly by the
+// browser via signed URLs from contest-upload-url.js). This function
+// only ever receives small JSON — form fields + the resulting image
+// URLs — so it never hits Vercel's request-body limit.
 //
-// Add to package.json dependencies: "formidable": "^3.5.1"
-// (Remember the earlier gotcha: the manifest file MUST be named
-// package.json, not package.js, or the deploy silently breaks.)
-//
-// Uses the existing env vars SUPBASE_URL / SUPBASE_SERVICE_ROLE_KEY
-// (the "no A" typo-turned-convention — keep it, don't "fix" it).
+// Replaces the earlier multipart/formidable version. If that one is
+// still deployed, overwrite it with this — no new dependency needed,
+// you can drop "formidable" from package.json.
 
 import { createClient } from '@supabase/supabase-js';
-import formidable from 'formidable';
-import fs from 'fs';
 
 export const config = {
-  api: { bodyParser: false },
+  api: { bodyParser: true }, // JSON now, not multipart
 };
 
 const supabase = createClient(
@@ -22,47 +20,34 @@ const supabase = createClient(
   process.env.SUPBASE_SERVICE_ROLE_KEY
 );
 
-const BUCKET = 'Ketchup Files UPLOADS';
-const MAX_IMAGES = 5;
-const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20MB per image
-
 export default async function handler(req, res) {
-  // Basic CORS so the Squarespace page (a different origin) can call this.
   res.setHeader('Access-Control-Allow-Origin', 'https://www.ketchupfiles.com');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const form = formidable({
-      multiples: true,
-      maxFiles: MAX_IMAGES,
-      maxFileSize: MAX_FILE_BYTES,
-    });
+    const {
+      contest_slug,
+      display_name,
+      instagram_handle,
+      based_in,
+      caption,
+      image_urls,
+    } = req.body || {};
 
-    const { fields, files } = await new Promise((resolve, reject) => {
-      form.parse(req, (err, fields, files) => {
-        if (err) reject(err);
-        else resolve({ fields, files });
-      });
-    });
+    const contestSlug = String(contest_slug || '').trim();
+    const displayName = String(display_name || '').trim();
+    const instagram = String(instagram_handle || '').trim().replace(/^@/, '');
+    const basedIn = String(based_in || '').trim();
 
-    const contestSlug = String(fields.contest_slug || 'street-style-50');
-    const displayName = String(fields.display_name || '').trim();
-    const instagram = String(fields.instagram_handle || '').trim().replace(/^@/, '');
-    const state = String(fields.roster_state || '').trim();
-    const city = String(fields.roster_city || '').trim();
-    const caption = String(fields.caption || '').trim();
-
-    if (!displayName || !state) {
-      return res.status(400).json({ error: 'Name and state are required.' });
+    if (!contestSlug) return res.status(400).json({ error: 'Missing contest.' });
+    if (!displayName) return res.status(400).json({ error: 'Name is required.' });
+    if (!Array.isArray(image_urls) || image_urls.length === 0) {
+      return res.status(400).json({ error: 'At least one image is required.' });
     }
 
-    // Confirm the contest is real, active, and still open
     const { data: contest, error: contestErr } = await supabase
       .from('contests')
       .select('id, active, ends_at')
@@ -76,32 +61,6 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Submissions are closed.' });
     }
 
-    // Normalize the file input into an array, cap at MAX_IMAGES
-    let uploaded = files.images;
-    if (!uploaded) {
-      return res.status(400).json({ error: 'At least one image is required.' });
-    }
-    if (!Array.isArray(uploaded)) uploaded = [uploaded];
-    uploaded = uploaded.slice(0, MAX_IMAGES);
-
-    const imageUrls = [];
-    for (const file of uploaded) {
-      const buffer = fs.readFileSync(file.filepath);
-      const ext = (file.originalFilename || 'jpg').split('.').pop().toLowerCase();
-      const path = `contest/${contestSlug}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-
-      const { error: uploadErr } = await supabase.storage
-        .from(BUCKET)
-        .upload(path, buffer, { contentType: file.mimetype || 'image/jpeg' });
-
-      if (uploadErr) throw uploadErr;
-
-      const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(path);
-      imageUrls.push(pub.publicUrl);
-    }
-
-    // If this Instagram handle matches an existing contributor, link the
-    // submission to their profile so a win can flow into roster status.
     let userId = null;
     if (instagram) {
       const { data: existing } = await supabase
@@ -119,10 +78,9 @@ export default async function handler(req, res) {
         user_id: userId,
         display_name: displayName,
         instagram_handle: instagram,
-        roster_state: state,
-        roster_city: city,
-        caption,
-        image_urls: imageUrls,
+        based_in: basedIn,
+        caption: String(caption || '').trim(),
+        image_urls,
         status: 'pending',
       })
       .select()
