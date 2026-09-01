@@ -1,9 +1,3 @@
-// api/contest-gallery.js
-// Public, read-only. Returns entries an admin has marked "shortlisted"
-// or "winner" for a given contest — this is what the "Featured" section
-// on the contest page reads from. No admin key needed to call this;
-// it only ever exposes fields that are safe to show publicly.
-
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
