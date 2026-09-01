@@ -1,4 +1,11 @@
-
+// api/contest-review.js
+// Admin-only. GET lists every submission across all four cities for
+// review; POST sets one submission's status. Protected with a shared
+// admin key for now (set CONTEST_ADMIN_KEY in Vercel env vars) since
+// I don't have the auth pattern 03-kf-admin-dashboard.html itself uses —
+// if you want this wired into that same login instead of a separate
+// key, share how that dashboard authenticates and this can be matched
+// to it.
 
 import { createClient } from '@supabase/supabase-js';
 
