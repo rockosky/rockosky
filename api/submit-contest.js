@@ -1,18 +1,7 @@
-// api/submit-contest.js
-// Step 2 of the submission flow. By the time this is called, the images
-// are already sitting in Supabase Storage (uploaded directly by the
-// browser via signed URLs from contest-upload-url.js). This function
-// only ever receives small JSON — form fields + the resulting image
-// URLs — so it never hits Vercel's request-body limit.
-//
-// Replaces the earlier multipart/formidable version. If that one is
-// still deployed, overwrite it with this — no new dependency needed,
-// you can drop "formidable" from package.json.
-
 import { createClient } from '@supabase/supabase-js';
 
 export const config = {
-  api: { bodyParser: true }, // JSON now, not multipart
+  api: { bodyParser: true },
 };
 
 const supabase = createClient(
@@ -29,12 +18,7 @@ export default async function handler(req, res) {
 
   try {
     const {
-      contest_slug,
-      display_name,
-      instagram_handle,
-      based_in,
-      caption,
-      image_urls,
+      contest_slug, display_name, instagram_handle, based_in, caption, image_urls,
     } = req.body || {};
 
     const contestSlug = String(contest_slug || '').trim();
