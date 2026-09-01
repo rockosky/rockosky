@@ -1,9 +1,4 @@
-// api/contest-upload-url.js
-// Step 1 of the submission flow. The browser asks for a signed upload
-// slot per file; the actual image bytes then go straight from the
-// browser to Supabase Storage (see 05... in the HTML's JS), never
-// through this function. This is what avoids Vercel's ~4.5MB request
-// body limit — the "file load failed" error.
+
 
 import { createClient } from '@supabase/supabase-js';
 
