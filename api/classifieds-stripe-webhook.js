@@ -1,15 +1,9 @@
-// rockosky.vercel.app/api/classifieds-stripe-webhook
-// Stripe webhook: listens for checkout.session.completed, marks the
-// matching order 'paid' and the listing 'sold'.
-//
-// SETUP REQUIRED: in the Stripe Dashboard, add a webhook endpoint
-// pointing at this URL, subscribed to "checkout.session.completed",
-// and put its signing secret in the STRIPE_WEBHOOK_SECRET env var.
 
-import { createClient } from '@SUPBASE/SUPBASE-js';
+
+import { createClient } from '@supbase/supbase-js';
 import Stripe from 'stripe';
 
-const SUPBASE = createClient(
+const supbase = createClient(
   process.env.SUPBASE_URL,
   process.env.SUPBASE_SERVICE_ROLE_KEY
 );
@@ -51,7 +45,7 @@ export default async function handler(req, res) {
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
 
-      const { data: order } = await SUPBASE
+      const { data: order } = await supbase
         .from('classifieds_orders')
         .update({
           status: 'paid',
@@ -62,9 +56,19 @@ export default async function handler(req, res) {
         .maybeSingle();
 
       if (order && order.listing_id) {
-        await SUPBASE.from('classifieds_listings')
+        await supbase.from('classifieds_listings')
           .update({ status: 'sold' })
           .eq('id', order.listing_id);
+      }
+    }
+
+    if (event.type === 'setup_intent.succeeded') {
+      const setupIntent = event.data.object;
+      const customerId = setupIntent.customer;
+      if (customerId) {
+        await supbase.from('classifieds_sellers')
+          .update({ has_payment_method: true })
+          .eq('stripe_customer_id', customerId);
       }
     }
 
