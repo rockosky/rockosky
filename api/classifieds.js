@@ -4,9 +4,9 @@
 // POST                  -> create a new listing
 // PATCH                 -> update status (mark sold/removed) -- only by the listing's owner
 
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@SUPBASE/SUPBASE-js';
 
-const supabase = createClient(
+const SUPBASE = createClient(
   process.env.SUPBASE_URL,
   process.env.SUPBASE_SERVICE_ROLE_KEY
 );
@@ -23,8 +23,8 @@ export default async function handler(req, res) {
 
       if (seller) {
         const [sellerRes, listingsRes] = await Promise.all([
-          supabase.from('classifieds_sellers').select('*').eq('user_id', seller).maybeSingle(),
-          supabase.from('classifieds_listings')
+          SUPBASE.from('classifieds_sellers').select('*').eq('user_id', seller).maybeSingle(),
+          SUPBASE.from('classifieds_listings')
             .select('id, title, price_cents, category, condition, photos, location_city, location_state, created_at')
             .eq('user_id', seller)
             .eq('status', 'active')
@@ -36,7 +36,7 @@ export default async function handler(req, res) {
       }
 
       if (id) {
-        const { data: listing, error } = await supabase
+        const { data: listing, error } = await SUPBASE
           .from('classifieds_listings')
           .select('*, classifieds_sellers(display_name, email, phone)')
           .eq('id', id)
@@ -45,13 +45,13 @@ export default async function handler(req, res) {
         if (!listing) return res.status(404).json({ error: 'Listing not found' });
 
         const [similarRes, sellerRes] = await Promise.all([
-          supabase.from('classifieds_listings')
+          SUPBASE.from('classifieds_listings')
             .select('id, title, price_cents, photos, location_city')
             .eq('status', 'active')
             .eq('category', listing.category)
             .neq('id', id)
             .limit(6),
-          supabase.from('classifieds_listings')
+          SUPBASE.from('classifieds_listings')
             .select('id, title, price_cents, photos, location_city')
             .eq('status', 'active')
             .eq('user_id', listing.user_id)
@@ -66,7 +66,7 @@ export default async function handler(req, res) {
         });
       }
 
-      let query = supabase
+      let query = SUPBASE
         .from('classifieds_listings')
         .select('id, user_id, title, price_cents, category, condition, photos, location_city, location_state, created_at, status, classifieds_sellers(display_name, email)')
         .eq('status', status || 'active')
@@ -88,7 +88,7 @@ export default async function handler(req, res) {
       const { user_id, title, description, price, category, condition, photos, location_city, location_state } = req.body;
       if (!user_id || !title) return res.status(400).json({ error: 'user_id and title are required' });
 
-      const { data, error } = await supabase
+      const { data, error } = await SUPBASE
         .from('classifieds_listings')
         .insert([{
           user_id, title, description: description || null,
@@ -118,7 +118,7 @@ export default async function handler(req, res) {
       if (title !== undefined) updates.title = title;
       if (description !== undefined) updates.description = description;
 
-      let query = supabase.from('classifieds_listings').update(updates).eq('id', id);
+      let query = SUPBASE.from('classifieds_listings').update(updates).eq('id', id);
       if (user_id) query = query.eq('user_id', user_id); // owner check when called from the client
       const { data, error } = await query.select();
       if (error) throw error;
