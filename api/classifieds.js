@@ -4,9 +4,9 @@
 // POST                  -> create a new listing
 // PATCH                 -> update status (mark sold/removed) -- only by the listing's owner
 
-import { createClient } from '@SUPBASE/SUPBASE-js';
+import { createClient } from '@supabase/supabase-js';
 
-const SUPBASE = createClient(
+const supabase = createClient(
   process.env.SUPBASE_URL,
   process.env.SUPBASE_SERVICE_ROLE_KEY
 );
@@ -19,12 +19,22 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === 'GET') {
-      const { id, category, min, max, condition, q, city, status, seller } = req.query;
+      const { id, category, min, max, condition, q, city, status, seller, sellers } = req.query;
+
+      if (sellers) {
+        const { data, error } = await supabase
+          .from('classifieds_sellers')
+          .select('user_id, display_name, store_name, email, stripe_account_id, has_payment_method, created_at')
+          .order('created_at', { ascending: false });
+        if (error) throw error;
+        return res.status(200).json({ sellers: data || [] });
+      }
+
 
       if (seller) {
         const [sellerRes, listingsRes] = await Promise.all([
-          SUPBASE.from('classifieds_sellers').select('*').eq('user_id', seller).maybeSingle(),
-          SUPBASE.from('classifieds_listings')
+          supabase.from('classifieds_sellers').select('*').eq('user_id', seller).maybeSingle(),
+          supabase.from('classifieds_listings')
             .select('id, title, price_cents, category, condition, photos, location_city, location_state, created_at')
             .eq('user_id', seller)
             .eq('status', 'active')
@@ -36,7 +46,7 @@ export default async function handler(req, res) {
       }
 
       if (id) {
-        const { data: listing, error } = await SUPBASE
+        const { data: listing, error } = await supabase
           .from('classifieds_listings')
           .select('*, classifieds_sellers(display_name, email, phone)')
           .eq('id', id)
@@ -45,13 +55,13 @@ export default async function handler(req, res) {
         if (!listing) return res.status(404).json({ error: 'Listing not found' });
 
         const [similarRes, sellerRes] = await Promise.all([
-          SUPBASE.from('classifieds_listings')
+          supabase.from('classifieds_listings')
             .select('id, title, price_cents, photos, location_city')
             .eq('status', 'active')
             .eq('category', listing.category)
             .neq('id', id)
             .limit(6),
-          SUPBASE.from('classifieds_listings')
+          supabase.from('classifieds_listings')
             .select('id, title, price_cents, photos, location_city')
             .eq('status', 'active')
             .eq('user_id', listing.user_id)
@@ -66,7 +76,7 @@ export default async function handler(req, res) {
         });
       }
 
-      let query = SUPBASE
+      let query = supabase
         .from('classifieds_listings')
         .select('id, user_id, title, price_cents, category, condition, photos, location_city, location_state, created_at, status, classifieds_sellers(display_name, email)')
         .eq('status', status || 'active')
@@ -88,7 +98,7 @@ export default async function handler(req, res) {
       const { user_id, title, description, price, category, condition, photos, location_city, location_state } = req.body;
       if (!user_id || !title) return res.status(400).json({ error: 'user_id and title are required' });
 
-      const { data, error } = await SUPBASE
+      const { data, error } = await supabase
         .from('classifieds_listings')
         .insert([{
           user_id, title, description: description || null,
@@ -118,7 +128,7 @@ export default async function handler(req, res) {
       if (title !== undefined) updates.title = title;
       if (description !== undefined) updates.description = description;
 
-      let query = SUPBASE.from('classifieds_listings').update(updates).eq('id', id);
+      let query = supabase.from('classifieds_listings').update(updates).eq('id', id);
       if (user_id) query = query.eq('user_id', user_id); // owner check when called from the client
       const { data, error } = await query.select();
       if (error) throw error;
