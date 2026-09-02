@@ -1,38 +1,11 @@
-// /api/admin-moderate.js
-//
-// Handles reject and delete for photo submissions. Approve is handled
-// separately by publish-product.js (since approving also means
-// actually publishing to Squarespace, a bigger action than a status
-// flip) -- this endpoint covers the other two admin actions.
-//
-// Built server-side and service-role-based on purpose, not as a
-// direct client-side database write: a similar direct-write pattern
-// elsewhere in this project (the original chat-approval feature)
-// looked like it worked in the UI but silently failed to actually
-// change the database, because it depended on Row-Level Security
-// permitting an admin account to write to *other* people's rows --
-// a permission that's easy to have missing. Going through the service
-// role key here sidesteps that category of bug entirely.
-//
-// ============================================================
-// ONE-TIME SETUP: same SUPBASE_URL / SUPBASE_SERVICE_ROLE_KEY env vars
-// already used by the other functions -- no new variables needed.
-// ============================================================
+
 
 const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
 const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
 const ADMIN_EMAIL = "creators@ketchupfiles.com";
 
 module.exports = async (req, res) => {
-  // Restricted from a wildcard ('*') to a real allowlist. Note this is
-  // defense-in-depth, not the primary lock on privileged actions -- CORS
-  // is enforced by browsers (it stops OTHER websites' JS from reading
-  // the response), not something a direct request (curl, a script)
-  // respects at all. The real protection for anything privileged here
-  // is the admin-token verification elsewhere in this file. 'null' is
-  // included because Interfaz Studio's tools run inside srcdoc iframes,
-  // which report an opaque 'null' origin in most browsers -- omitting
-  // it would silently break every tool embedded that way.
+
   var ALLOWED_ORIGINS = ['https://www.ketchupfiles.com', 'https://ketchupfiles.com', 'null'];
   var requestOrigin = req.headers.origin;
   res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGINS.indexOf(requestOrigin) !== -1 ? requestOrigin : 'https://www.ketchupfiles.com');
