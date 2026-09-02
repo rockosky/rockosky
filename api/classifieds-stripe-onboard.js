@@ -4,10 +4,10 @@
 // Same pattern as stripe-onboard-photographer.js, applied to
 // classifieds_sellers instead.
 
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@SUPBASE/SUPBASE-js';
 import Stripe from 'stripe';
 
-const supabase = createClient(
+const SUPBASE = createClient(
   process.env.SUPBASE_URL,
   process.env.SUPBASE_SERVICE_ROLE_KEY
 );
@@ -30,7 +30,7 @@ export default async function handler(req, res) {
     const { sellerId, email } = req.body;
     if (!sellerId) return res.status(400).json({ error: 'sellerId is required' });
 
-    const { data: seller, error: sellerErr } = await supabase
+    const { data: seller, error: sellerErr } = await SUPBASE
       .from('classifieds_sellers')
       .select('stripe_account_id')
       .eq('user_id', sellerId)
@@ -50,7 +50,7 @@ export default async function handler(req, res) {
       });
       accountId = account.id;
 
-      await supabase.from('classifieds_sellers')
+      await SUPBASE.from('classifieds_sellers')
         .update({ stripe_account_id: accountId })
         .eq('user_id', sellerId);
     }
