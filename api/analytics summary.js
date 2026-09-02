@@ -3,9 +3,9 @@
 // search keywords, top pages, and total visits over a date range.
 // Feeds the media kit / admin analytics view.
 
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@SUPBASE/SUPBASE-js';
 
-const supabase = createClient(
+const SUPBASE = createClient(
   process.env.SUPBASE_URL,
   process.env.SUPBASE_SERVICE_ROLE_KEY
 );
@@ -27,7 +27,7 @@ export default async function handler(req, res) {
     const days = parseInt(req.query.days) || 30;
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
-    const { data, error } = await supabase
+    const { data, error } = await SUPBASE
       .from('site_analytics')
       .select('page_path, search_keyword, country, country_code, city, referrer, created_at')
       .gte('created_at', since);
