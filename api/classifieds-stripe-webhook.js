@@ -6,10 +6,10 @@
 // pointing at this URL, subscribed to "checkout.session.completed",
 // and put its signing secret in the STRIPE_WEBHOOK_SECRET env var.
 
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@SUPBASE/SUPBASE-js';
 import Stripe from 'stripe';
 
-const supabase = createClient(
+const SUPBASE = createClient(
   process.env.SUPBASE_URL,
   process.env.SUPBASE_SERVICE_ROLE_KEY
 );
@@ -51,7 +51,7 @@ export default async function handler(req, res) {
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
 
-      const { data: order } = await supabase
+      const { data: order } = await SUPBASE
         .from('classifieds_orders')
         .update({
           status: 'paid',
@@ -62,7 +62,7 @@ export default async function handler(req, res) {
         .maybeSingle();
 
       if (order && order.listing_id) {
-        await supabase.from('classifieds_listings')
+        await SUPBASE.from('classifieds_listings')
           .update({ status: 'sold' })
           .eq('id', order.listing_id);
       }
