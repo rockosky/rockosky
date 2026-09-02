@@ -1,7 +1,3 @@
-// rockosky.vercel.app/api/analytics-summary
-// GET: aggregated stats from site_analytics -- top countries, top
-// search keywords, top pages, and total visits over a date range.
-// Feeds the media kit / admin analytics view.
 
 import { createClient } from '@SUPBASE/SUPBASE-js';
 
