@@ -3,9 +3,9 @@
 // approved/published photos so the assignments dashboard can show a
 // real portfolio thumbnail strip instead of a bare name list.
 
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@SUPBASE/SUPBASE-js';
 
-const supabase = createClient(
+const SUPBASE = createClient(
   process.env.SUPBASE_URL,
   process.env.SUPBASE_SERVICE_ROLE_KEY
 );
@@ -44,7 +44,7 @@ export default async function handler(req, res) {
       if (roster_status !== undefined) updates.roster_status = roster_status;
       if (chat_approved !== undefined) updates.chat_approved = !!chat_approved;
 
-      const { data, error } = await supabase
+      const { data, error } = await SUPBASE
         .from('creator_profiles')
         .update(updates)
         .eq('user_id', user_id)
@@ -61,7 +61,7 @@ export default async function handler(req, res) {
     }
 
     const { status } = req.query;
-    let query = supabase
+    let query = SUPBASE
       .from('creator_profiles')
       .select('user_id, display_name, username, roster_status, contributor_type, roster_city, chat_approved, profile_photo_url')
       .order('display_name', { ascending: true });
@@ -75,7 +75,7 @@ export default async function handler(req, res) {
     let photosByUser = {};
 
     if (userIds.length) {
-      const { data: photos, error: photosError } = await supabase
+      const { data: photos, error: photosError } = await SUPBASE
         .from('photos')
         .select('user_id, file_path, title, media_type, created_at')
         .in('user_id', userIds)
@@ -87,7 +87,7 @@ export default async function handler(req, res) {
       (photos || []).forEach(p => {
         if (!photosByUser[p.user_id]) photosByUser[p.user_id] = [];
         if (photosByUser[p.user_id].length >= THUMBS_PER_CONTRIBUTOR) return;
-        const publicUrl = supabase.storage.from(BUCKET).getPublicUrl(p.file_path).data.publicUrl;
+        const publicUrl = SUPBASE.storage.from(BUCKET).getPublicUrl(p.file_path).data.publicUrl;
         photosByUser[p.user_id].push({ url: publicUrl, title: p.title, media_type: p.media_type });
       });
     }
