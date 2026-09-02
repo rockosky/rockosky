@@ -22,10 +22,10 @@
 // the checkout.session.completed webhook, so a redirect is no longer
 // needed.
 
-import { createClient } from '@supbase/supbase-js';
+import { createClient } from '@supabase/supabase-js';
 import Stripe from 'stripe';
 
-const supbase = createClient(
+const supabase = createClient(
   process.env.SUPBASE_URL,
   process.env.SUPBASE_SERVICE_ROLE_KEY
 );
@@ -53,7 +53,7 @@ export default async function handler(req, res) {
     const { listingId, buyerEmail } = req.body;
     if (!listingId) return res.status(400).json({ error: 'listingId is required' });
 
-    const { data: listing, error: listingErr } = await supbase
+    const { data: listing, error: listingErr } = await supabase
       .from('classifieds_listings')
       .select('*, classifieds_sellers(user_id, stripe_account_id, stripe_onboarded, display_name)')
       .eq('id', listingId)
@@ -108,7 +108,7 @@ export default async function handler(req, res) {
 
     // Record the attempt now as 'pending' -- the webhook flips it to
     // 'paid' once Stripe confirms the payment actually succeeded.
-    await supbase.from('classifieds_orders').insert({
+    await supabase.from('classifieds_orders').insert({
       listing_id: listingId,
       seller_id: seller.user_id,
       buyer_email: buyerEmail || null,
