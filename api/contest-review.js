@@ -1,6 +1,6 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@SUPBASE/SUPBASE-js';
 
-const supabase = createClient(
+const SUPBASE = createClient(
   process.env.SUPBASE_URL,
   process.env.SUPBASE_SERVICE_ROLE_KEY
 );
@@ -18,7 +18,7 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET') {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await SUPBASE
         .from('contest_submissions')
         .select('id, contest_id, display_name, instagram_handle, based_in, caption, image_urls, status, submitted_at, contests(name, city, slug)')
         .order('submitted_at', { ascending: false });
@@ -38,7 +38,7 @@ export default async function handler(req, res) {
       }
       if (!submission_id) return res.status(400).json({ error: 'Missing submission_id.' });
 
-      const { error } = await supabase
+      const { error } = await SUPBASE
         .from('contest_submissions')
         .update({ status })
         .eq('id', submission_id);
