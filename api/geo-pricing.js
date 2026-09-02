@@ -2,9 +2,9 @@
 // GET: resolve the visitor's IP (or an explicit ?country= override) to
 // a currency, price multiplier, and licensing tier from pricing_regions.
 
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@SUPBASE/SUPBASE-js';
 
-const supabase = createClient(
+const SUPBASE = createClient(
   process.env.SUPBASE_URL,
   process.env.SUPBASE_SERVICE_ROLE_KEY
 );
@@ -39,7 +39,7 @@ export default async function handler(req, res) {
 
     if (!countryCode) return res.status(200).json(DEFAULT_REGION);
 
-    const { data, error } = await supabase
+    const { data, error } = await SUPBASE
       .from('pricing_regions')
       .select('*')
       .eq('country_code', countryCode.toUpperCase())
