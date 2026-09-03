@@ -103,6 +103,12 @@ export default async function handler(req, res) {
       }],
 
       // --- kept despite not being in Field Intents (see file header) ---
+      // Managed Payments is a newer Stripe feature enabled by default
+      // on this account, which conflicts with the classic Connect
+      // application_fee_amount approach used below -- Stripe's own
+      // error message says to disable it per-request like this.
+      managed_payments: { enabled: false },
+
       customer_email: buyerEmail || undefined,
       payment_intent_data: {
         application_fee_amount: feeCents,
