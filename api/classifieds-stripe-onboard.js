@@ -1,4 +1,13 @@
-
+// rockosky.vercel.app/api/classifieds-stripe-onboard
+// POST: create (or resume) a Stripe Connect Express account for a
+// classifieds seller, and return the onboarding URL to send them to.
+//
+// NOTE: client setup (Stripe + Supabase) is done INSIDE the handler,
+// wrapped in try/catch -- not at module top-level like other files in
+// this project. If something is misconfigured (a missing env var, a
+// malformed key), this makes the function return a real JSON error
+// message you can read in the browser, instead of crashing before
+// any of our own error handling gets a chance to run.
 
 import { createClient } from '@supabase/supabase-js';
 import Stripe from 'stripe';
