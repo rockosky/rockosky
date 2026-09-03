@@ -13,13 +13,13 @@
 // Auth: header  x-lsdm-key: <LSDM_FEED_KEY>
 //
 // Each item includes a direct public image/video URL, so their side
-// doesn't need its own supbase credentials — just this one key.
+// doesn't need its own supabase credentials — just this one key.
 
 // Confirmed via debug-env.js that the real Vercel env vars are named
-// SUPBASE_URL / SUPBASE_SERVICE_ROLE_KEY (no "A") -- reading both
+// supabase_URL / supabase_SERVICE_ROLE_KEY (no "A") -- reading both
 // spellings here so this works regardless.
-const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
-const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
+const supabase_URL = process.env.supabase_URL || process.env.supabase_URL;
+const supabase_SERVICE_ROLE_KEY = process.env.supabase_SERVICE_ROLE_KEY || process.env.supabase_SERVICE_ROLE_KEY;
 const LSDM_FEED_KEY = process.env.LSDM_FEED_KEY; // set this in Vercel env vars, share only with LSDM
 const BUCKET = "Ketchup Files UPLOADS";
 
@@ -43,7 +43,7 @@ module.exports = async (req, res) => {
   }
 
   try {
-    let query = `${supbase_URL}/rest/v1/photos?status=eq.published&order=published_at.desc&select=` +
+    let query = `${supabase_URL}/rest/v1/photos?status=eq.published&order=published_at.desc&select=` +
       encodeURIComponent(
         'id,title,description,category,subcategory,guest_name,designer_name,season,city,' +
         'hashtags,social_url,photographer_name,media_type,file_path,price_cents,' +
@@ -57,10 +57,10 @@ module.exports = async (req, res) => {
       query += `&exported_to_lsdm=eq.false`;
     }
 
-    const dataRes = await fetch(query, { headers: supbaseHeaders() });
+    const dataRes = await fetch(query, { headers: supabaseHeaders() });
     if (!dataRes.ok) {
       const errText = await dataRes.text();
-      throw new Error('supbase query failed: ' + errText);
+      throw new Error('supabase query failed: ' + errText);
     }
     const rows = await dataRes.json();
 
@@ -78,7 +78,7 @@ module.exports = async (req, res) => {
       socialUrl: row.social_url,
       photographerCredit: row.photographer_name,
       mediaType: row.media_type,
-      mediaUrl: `${supbase_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${row.file_path}`,
+      mediaUrl: `${supabase_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${row.file_path}`,
       priceUsd: row.price_cents != null ? row.price_cents / 100 : null,
       buyUrl: row.squarespace_product_url || null,
       publishedAt: row.published_at,
@@ -92,9 +92,9 @@ module.exports = async (req, res) => {
   }
 };
 
-function supbaseHeaders() {
+function supabaseHeaders() {
   return {
-    apikey: supbase_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${supbase_SERVICE_ROLE_KEY}`
+    apikey: supabase_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${supabase_SERVICE_ROLE_KEY}`
   };
 }
