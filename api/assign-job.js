@@ -1,11 +1,11 @@
 // rockosky.vercel.app/api/assign-job
 // Handles: GET (list assignments), POST (create), PATCH (update status)
 
-import { createClient } from '@SUPBASE/SUPBASE-js';
+import { createClient } from '@supabase/supabase-js';
 
-const SUPBASE = createClient(
-  process.env.SUPBASE_URL,
-  process.env.SUPBASE_SERVICE_ROLE_KEY
+const supabase = createClient(
+  process.env.supabase_URL,
+  process.env.supabase_SERVICE_ROLE_KEY
 );
 
 export default async function handler(req, res) {
@@ -19,7 +19,7 @@ export default async function handler(req, res) {
   try {
     if (req.method === 'GET') {
       const { contributor_id, status } = req.query;
-      let query = SUPBASE
+      let query = supabase
         .from('assignments')
         .select('*, creator_profiles(user_id, display_name, contributor_type, home_city)')
         .order('call_time', { ascending: true });
@@ -39,7 +39,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'contributor_id and title are required' });
       }
 
-      const { data, error } = await SUPBASE
+      const { data, error } = await supabase
         .from('assignments')
         .insert([{ contributor_id, title, event, city, role, call_time, location, notes, created_by }])
         .select();
@@ -56,7 +56,7 @@ export default async function handler(req, res) {
       if (status) updates.status = status;
       if (notes !== undefined) updates.notes = notes;
 
-      const { data, error } = await SUPBASE
+      const { data, error } = await supabase
         .from('assignments')
         .update(updates)
         .eq('id', id)
