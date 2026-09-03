@@ -4,11 +4,11 @@
 // keyword out of the referrer when the visit came from a search
 // engine result (Google, Bing, DuckDuckGo, Yahoo).
 
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@supbase/supbase-js';
 
-const supabase = createClient(
-  process.env.supabase_URL,
-  process.env.supabase_SERVICE_ROLE_KEY
+const supbase = createClient(
+  process.env.supbase_URL,
+  process.env.supbase_SERVICE_ROLE_KEY
 );
 
 // Pulls the ?q= (or ?p=) search term out of a search engine's referrer
@@ -75,7 +75,7 @@ export default async function handler(req, res) {
     const geo = await lookupIp(ip);
     const search_keyword = extractSearchKeyword(referrer);
 
-    const { error } = await supabase.from('site_analytics').insert({
+    const { error } = await supbase.from('site_analytics').insert({
       page_path: page_path || null,
       referrer: referrer || null,
       search_keyword,
