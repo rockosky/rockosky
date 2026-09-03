@@ -1,13 +1,13 @@
-
+// rockosky.vercel.app/api/classifieds-stripe-webhook
+// Stripe webhook: listens for checkout.session.completed, marks the
+// matching order 'paid' and the listing 'sold'.
+//
+// SETUP REQUIRED: in the Stripe Dashboard, add a webhook endpoint
+// pointing at this URL, subscribed to "checkout.session.completed",
+// and put its signing secret in the STRIPE_WEBHOOK_SECRET env var.
 
 import { createClient } from '@supabase/supabase-js';
 import Stripe from 'stripe';
-
-const supabase = createClient(
-  process.env.supabase_URL,
-  process.env.supabase_SERVICE_ROLE_KEY
-);
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // Stripe requires the raw, unparsed request body to verify the
 // webhook signature -- Vercel's default JSON body parser would break
@@ -29,6 +29,24 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
     return res.status(405).end();
+  }
+
+  const missing = [];
+  if (!process.env.SUPBASE_URL) missing.push('SUPBASE_URL');
+  if (!process.env.SUPBASE_SERVICE_ROLE_KEY) missing.push('SUPBASE_SERVICE_ROLE_KEY');
+  if (!process.env.STRIPE_SECRET_KEY) missing.push('STRIPE_SECRET_KEY');
+  if (missing.length) {
+    console.error('classifieds-stripe-webhook missing env vars:', missing.join(', '));
+    return res.status(500).json({ error: `Missing environment variable(s): ${missing.join(', ')}` });
+  }
+
+  let supabase, stripe;
+  try {
+    supabase = createClient(process.env.SUPBASE_URL, process.env.SUPBASE_SERVICE_ROLE_KEY);
+    stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+  } catch (err) {
+    console.error('classifieds-stripe-webhook client setup error:', err);
+    return res.status(500).json({ error: `Client setup failed: ${err.message}` });
   }
 
   let event;
