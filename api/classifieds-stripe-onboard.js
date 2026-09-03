@@ -1,15 +1,11 @@
-// rockosky.vercel.app/api/classifieds-stripe-onboard
-// POST: create (or resume) a Stripe Connect Express account for a
-// classifieds seller, and return the onboarding URL to send them to.
-// Same pattern as stripe-onboard-photographer.js, applied to
-// classifieds_sellers instead.
 
-import { createClient } from '@SUPBASE/SUPBASE-js';
+
+import { createClient } from '@supabase/supabase-js';
 import Stripe from 'stripe';
 
-const SUPBASE = createClient(
-  process.env.SUPBASE_URL,
-  process.env.SUPBASE_SERVICE_ROLE_KEY
+const supabase = createClient(
+  process.env.supabase_URL,
+  process.env.supabase_SERVICE_ROLE_KEY
 );
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -30,7 +26,7 @@ export default async function handler(req, res) {
     const { sellerId, email } = req.body;
     if (!sellerId) return res.status(400).json({ error: 'sellerId is required' });
 
-    const { data: seller, error: sellerErr } = await SUPBASE
+    const { data: seller, error: sellerErr } = await supabase
       .from('classifieds_sellers')
       .select('stripe_account_id')
       .eq('user_id', sellerId)
@@ -50,7 +46,7 @@ export default async function handler(req, res) {
       });
       accountId = account.id;
 
-      await SUPBASE.from('classifieds_sellers')
+      await supabase.from('classifieds_sellers')
         .update({ stripe_account_id: accountId })
         .eq('user_id', sellerId);
     }
