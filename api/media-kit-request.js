@@ -13,11 +13,6 @@
 import { createClient } from '@supabase/supabase-js';
 import nodemailer from 'nodemailer';
 
-const supabase = createClient(
-  process.env.supabase_URL,
-  process.env.supabase_SERVICE_ROLE_KEY
-);
-
 const ADMIN_EMAIL = process.env.ADMIN_NOTIFICATION_EMAIL || 'creators@ketchupfiles.com';
 
 function getTransport() {
@@ -52,6 +47,14 @@ export default async function handler(req, res) {
   }
 
   try {
+    const missing = [];
+    if (!process.env.SUPBASE_URL) missing.push('SUPBASE_URL');
+    if (!process.env.SUPBASE_SERVICE_ROLE_KEY) missing.push('SUPBASE_SERVICE_ROLE_KEY');
+    if (missing.length) {
+      return res.status(500).json({ error: `Missing environment variable(s): ${missing.join(', ')}` });
+    }
+    const supabase = createClient(process.env.SUPBASE_URL, process.env.SUPBASE_SERVICE_ROLE_KEY);
+
     const { contact_name, company, email, message } = req.body;
     if (!email) return res.status(400).json({ error: 'email is required' });
 
