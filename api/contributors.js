@@ -5,11 +5,6 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
-  process.env.supabase_URL,
-  process.env.supabase_SERVICE_ROLE_KEY
-);
-
 const BUCKET = "Ketchup Files UPLOADS";
 const THUMBS_PER_CONTRIBUTOR = 4;
 
@@ -26,6 +21,14 @@ export default async function handler(req, res) {
   }
 
   try {
+    const missing = [];
+    if (!process.env.SUPBASE_URL) missing.push('SUPBASE_URL');
+    if (!process.env.SUPBASE_SERVICE_ROLE_KEY) missing.push('SUPBASE_SERVICE_ROLE_KEY');
+    if (missing.length) {
+      return res.status(500).json({ error: `Missing environment variable(s): ${missing.join(', ')}` });
+    }
+    const supabase = createClient(process.env.SUPBASE_URL, process.env.SUPBASE_SERVICE_ROLE_KEY);
+
     if (req.method === 'PATCH') {
       const { user_id, roster_status, chat_approved } = req.body;
       const VALID_STATUSES = ['pending', 'active', 'inactive', 'alumni'];
