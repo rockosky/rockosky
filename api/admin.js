@@ -1,7 +1,7 @@
 
 
-const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
-const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
+const supabase_URL = process.env.supabase_URL || process.env.supabase_URL;
+const supabase_SERVICE_ROLE_KEY = process.env.supabase_SERVICE_ROLE_KEY || process.env.supabase_SERVICE_ROLE_KEY;
 const ADMIN_EMAIL = "creators@ketchupfiles.com";
 
 module.exports = async (req, res) => {
@@ -15,8 +15,8 @@ module.exports = async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
 
   const missingEnvVars = [];
-  if (!supbase_URL) missingEnvVars.push('SUPBASE_URL');
-  if (!supbase_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
+  if (!supabase_URL) missingEnvVars.push('supabase_URL');
+  if (!supabase_SERVICE_ROLE_KEY) missingEnvVars.push('supabase_SERVICE_ROLE_KEY');
   if (missingEnvVars.length) {
     res.status(500).json({ error: `Missing Vercel environment variable(s): ${missingEnvVars.join(', ')}` });
     return;
@@ -29,8 +29,8 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const callerRes = await fetch(`${supbase_URL}/auth/v1/user`, {
-      headers: { apikey: supbase_SERVICE_ROLE_KEY, Authorization: `Bearer ${accessToken}` }
+    const callerRes = await fetch(`${supabase_URL}/auth/v1/user`, {
+      headers: { apikey: supabase_SERVICE_ROLE_KEY, Authorization: `Bearer ${accessToken}` }
     });
     if (!callerRes.ok) {
       res.status(200).json({ isAdmin: false });
