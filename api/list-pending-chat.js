@@ -1,7 +1,7 @@
 
 
-const SUPBASE_URL = process.env.SUPBASE_URL || process.env.SUPBASE_URL;
-const SUPBASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.SUPBASE_SERVICE_ROLE_KEY;
+const supabase_URL = process.env.supabase_URL || process.env.supabase_URL;
+const supabase_SERVICE_ROLE_KEY = process.env.supabase_SERVICE_ROLE_KEY || process.env.supabase_SERVICE_ROLE_KEY;
 const ADMIN_EMAIL = "creators@ketchupfiles.com";
 
 module.exports = async (req, res) => {
@@ -13,8 +13,8 @@ module.exports = async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
 
   const missingEnvVars = [];
-  if (!SUPBASE_URL) missingEnvVars.push('SUPBASE_URL');
-  if (!SUPBASE_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
+  if (!supabase_URL) missingEnvVars.push('supabase_URL');
+  if (!supabase_SERVICE_ROLE_KEY) missingEnvVars.push('supabase_SERVICE_ROLE_KEY');
   if (missingEnvVars.length) {
     res.status(500).json({ error: `Missing Vercel environment variable(s): ${missingEnvVars.join(', ')}` });
     return;
@@ -29,8 +29,8 @@ module.exports = async (req, res) => {
   try {
     // Same admin check as approve-chat.js -- verified server-side
     // against the real account, never trusted from the client.
-    const callerRes = await fetch(`${SUPBASE_URL}/auth/v1/user`, {
-      headers: { apikey: SUPBASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${adminAccessToken}` }
+    const callerRes = await fetch(`${supabase_URL}/auth/v1/user`, {
+      headers: { apikey: supabase_SERVICE_ROLE_KEY, Authorization: `Bearer ${adminAccessToken}` }
     });
     if (!callerRes.ok) {
       res.status(401).json({ error: 'Not logged in, or session expired.' });
@@ -47,11 +47,11 @@ module.exports = async (req, res) => {
     // location/roster_city included so the admin can see roughly where
     // each pending account is from, not just a name.
     const listRes = await fetch(
-      `${SUPBASE_URL}/rest/v1/creator_profiles?chat_approved=eq.false&select=user_id,display_name,username,chat_approved,location,roster_city`,
+      `${supabase_URL}/rest/v1/creator_profiles?chat_approved=eq.false&select=user_id,display_name,username,chat_approved,location,roster_city`,
       {
         headers: {
-          apikey: SUPBASE_SERVICE_ROLE_KEY,
-          Authorization: `Bearer ${SUPBASE_SERVICE_ROLE_KEY}`
+          apikey: supabase_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${supabase_SERVICE_ROLE_KEY}`
         }
       }
     );
@@ -71,8 +71,8 @@ module.exports = async (req, res) => {
     // approval), so this stays cheap in practice.
     const withEmail = await Promise.all(rows.map(async (row) => {
       try {
-        const userRes = await fetch(`${SUPBASE_URL}/auth/v1/admin/users/${row.user_id}`, {
-          headers: { apikey: SUPBASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPBASE_SERVICE_ROLE_KEY}` }
+        const userRes = await fetch(`${supabase_URL}/auth/v1/admin/users/${row.user_id}`, {
+          headers: { apikey: supabase_SERVICE_ROLE_KEY, Authorization: `Bearer ${supabase_SERVICE_ROLE_KEY}` }
         });
         if (userRes.ok) {
           const userData = await userRes.json();
