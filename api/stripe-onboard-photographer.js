@@ -1,7 +1,7 @@
 
 
-const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
-const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
+const supabase_URL = process.env.supabase_URL || process.env.supabase_URL;
+const supabase_SERVICE_ROLE_KEY = process.env.supabase_SERVICE_ROLE_KEY || process.env.supabase_SERVICE_ROLE_KEY;
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 const RETURN_URL = 'https://www.ketchupfiles.com/chat?stripe=return';
 const REFRESH_URL = 'https://www.ketchupfiles.com/chat?stripe=refresh';
@@ -15,8 +15,8 @@ module.exports = async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
 
   const missingEnvVars = [];
-  if (!supbase_URL) missingEnvVars.push('SUPBASE_URL');
-  if (!supbase_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
+  if (!supabase_URL) missingEnvVars.push('supabase_URL');
+  if (!supabase_SERVICE_ROLE_KEY) missingEnvVars.push('supabase_SERVICE_ROLE_KEY');
   if (!STRIPE_SECRET_KEY) missingEnvVars.push('STRIPE_SECRET_KEY');
   if (missingEnvVars.length) {
     res.status(500).json({ error: `Missing Vercel environment variable(s): ${missingEnvVars.join(', ')}` });
@@ -33,8 +33,8 @@ module.exports = async (req, res) => {
     // Check if this photographer already has a Stripe account on file --
     // reuse it instead of creating a duplicate every time they click the button.
     const profileRes = await fetch(
-      `${supbase_URL}/rest/v1/creator_profiles?user_id=eq.${encodeURIComponent(photographerId)}&select=stripe_account_id`,
-      { headers: supbaseHeaders() }
+      `${supabase_URL}/rest/v1/creator_profiles?user_id=eq.${encodeURIComponent(photographerId)}&select=stripe_account_id`,
+      { headers: supabaseHeaders() }
     );
     const profiles = await profileRes.json();
     let stripeAccountId = (Array.isArray(profiles) && profiles[0] && profiles[0].stripe_account_id) || null;
@@ -55,10 +55,10 @@ module.exports = async (req, res) => {
       stripeAccountId = account.id;
 
       const updateRes = await fetch(
-        `${supbase_URL}/rest/v1/creator_profiles?user_id=eq.${encodeURIComponent(photographerId)}`,
+        `${supabase_URL}/rest/v1/creator_profiles?user_id=eq.${encodeURIComponent(photographerId)}`,
         {
           method: 'PATCH',
-          headers: { ...supbaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+          headers: { ...supabaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
           body: JSON.stringify({ stripe_account_id: stripeAccountId })
         }
       );
@@ -116,9 +116,9 @@ function flattenParams(obj, prefix, body) {
   });
 }
 
-function supbaseHeaders() {
+function supabaseHeaders() {
   return {
-    apikey: supbase_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${supbase_SERVICE_ROLE_KEY}`
+    apikey: supabase_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${supabase_SERVICE_ROLE_KEY}`
   };
 }
