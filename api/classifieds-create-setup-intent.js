@@ -4,12 +4,12 @@
 // Marking has_payment_method = true happens in the webhook once
 // Stripe confirms the card was actually saved, not here.
 
-import { createClient } from '@supbase/supbase-js';
+import { createClient } from '@supabase/supabase-js';
 import Stripe from 'stripe';
 
-const supbase = createClient(
-  process.env.SUPBASE_URL,
-  process.env.SUPBASE_SERVICE_ROLE_KEY
+const supabase = createClient(
+  process.env.supabase_URL,
+  process.env.supabase_SERVICE_ROLE_KEY
 );
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -28,7 +28,7 @@ export default async function handler(req, res) {
     const { userId, email } = req.body;
     if (!userId) return res.status(400).json({ error: 'userId is required' });
 
-    const { data: seller, error: sellerErr } = await supbase
+    const { data: seller, error: sellerErr } = await supabase
       .from('classifieds_sellers')
       .select('stripe_customer_id')
       .eq('user_id', userId)
@@ -43,7 +43,7 @@ export default async function handler(req, res) {
         metadata: { classifieds_user_id: userId }
       });
       customerId = customer.id;
-      await supbase.from('classifieds_sellers')
+      await supabase.from('classifieds_sellers')
         .update({ stripe_customer_id: customerId })
         .eq('user_id', userId);
     }
