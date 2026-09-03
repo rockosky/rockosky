@@ -4,12 +4,7 @@
 // keyword out of the referrer when the visit came from a search
 // engine result (Google, Bing, DuckDuckGo, Yahoo).
 
-import { createClient } from '@supbase/supbase-js';
-
-const supbase = createClient(
-  process.env.supbase_URL,
-  process.env.supbase_SERVICE_ROLE_KEY
-);
+import { createClient } from '@supabase/supabase-js';
 
 // Pulls the ?q= (or ?p=) search term out of a search engine's referrer
 // URL. Returns null for anything else (direct traffic, social, etc).
@@ -65,6 +60,14 @@ export default async function handler(req, res) {
   }
 
   try {
+    const missing = [];
+    if (!process.env.SUPBASE_URL) missing.push('SUPBASE_URL');
+    if (!process.env.SUPBASE_SERVICE_ROLE_KEY) missing.push('SUPBASE_SERVICE_ROLE_KEY');
+    if (missing.length) {
+      return res.status(500).json({ error: `Missing environment variable(s): ${missing.join(', ')}` });
+    }
+    const supabase = createClient(process.env.SUPBASE_URL, process.env.SUPBASE_SERVICE_ROLE_KEY);
+
     const { page_path, referrer, user_agent } = req.body;
 
     // Vercel puts the real client IP in x-forwarded-for (first entry
@@ -75,7 +78,7 @@ export default async function handler(req, res) {
     const geo = await lookupIp(ip);
     const search_keyword = extractSearchKeyword(referrer);
 
-    const { error } = await supbase.from('site_analytics').insert({
+    const { error } = await supabase.from('site_analytics').insert({
       page_path: page_path || null,
       referrer: referrer || null,
       search_keyword,
