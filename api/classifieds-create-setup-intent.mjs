@@ -1,4 +1,4 @@
-// rockosky.vercel.app/api/classifieds-create-setup-intent
+]// rockosky.vercel.app/api/classifieds-create-setup-intent
 // POST: creates (or reuses) a Stripe Customer for this account, then
 // a SetupIntent so the browser can save a card via Stripe Elements.
 // Marking has_payment_method = true happens in the webhook once
