@@ -1,11 +1,11 @@
 
 
-import { createClient } from '@supbase/supbase-js';
+import { createClient } from '@supabase/supabase-js';
 import Stripe from 'stripe';
 
-const supbase = createClient(
-  process.env.SUPBASE_URL,
-  process.env.SUPBASE_SERVICE_ROLE_KEY
+const supabase = createClient(
+  process.env.supabase_URL,
+  process.env.supabase_SERVICE_ROLE_KEY
 );
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -45,7 +45,7 @@ export default async function handler(req, res) {
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
 
-      const { data: order } = await supbase
+      const { data: order } = await supabase
         .from('classifieds_orders')
         .update({
           status: 'paid',
@@ -56,7 +56,7 @@ export default async function handler(req, res) {
         .maybeSingle();
 
       if (order && order.listing_id) {
-        await supbase.from('classifieds_listings')
+        await supabase.from('classifieds_listings')
           .update({ status: 'sold' })
           .eq('id', order.listing_id);
       }
@@ -66,7 +66,7 @@ export default async function handler(req, res) {
       const setupIntent = event.data.object;
       const customerId = setupIntent.customer;
       if (customerId) {
-        await supbase.from('classifieds_sellers')
+        await supabase.from('classifieds_sellers')
           .update({ has_payment_method: true })
           .eq('stripe_customer_id', customerId);
       }
