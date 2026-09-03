@@ -3,11 +3,11 @@
 // counts and a sample thumbnail (?list=1), OR fetch every published
 // photo for one named guest/designer (?name=...) for a landing page.
 
-import { createClient } from '@SUPBASE/SUPBASE-js';
+import { createClient } from '@supabase/supabase-js';
 
-const SUPBASE = createClient(
-  process.env.SUPBASE_URL,
-  process.env.SUPBASE_SERVICE_ROLE_KEY
+const supabase = createClient(
+  process.env.supabase_URL,
+  process.env.supabase_SERVICE_ROLE_KEY
 );
 
 const BUCKET = "Ketchup Files UPLOADS";
@@ -28,7 +28,7 @@ export default async function handler(req, res) {
 
     if (name) {
       // Single guest/designer's page: every published photo they appear in
-      const { data, error } = await SUPBASE
+      const { data, error } = await supabase
         .from('photos')
         .select('file_path, title, description, city, season, photographer_name, guest_name, designer_name, media_type, created_at')
         .in('status', ['approved', 'published'])
@@ -39,14 +39,14 @@ export default async function handler(req, res) {
 
       const photos = (data || []).map(p => ({
         ...p,
-        url: SUPBASE.storage.from(BUCKET).getPublicUrl(p.file_path).data.publicUrl
+        url: supabase.storage.from(BUCKET).getPublicUrl(p.file_path).data.publicUrl
       }));
 
       return res.status(200).json({ name, photos, photo_count: photos.length });
     }
 
     // Directory mode: every distinct name that appears, with counts
-    const { data, error } = await SUPBASE
+    const { data, error } = await supabase
       .from('photos')
       .select('file_path, guest_name, designer_name, city, season')
       .in('status', ['approved', 'published']);
@@ -62,7 +62,7 @@ export default async function handler(req, res) {
     });
 
     const directory = Object.values(namesMap)
-      .map(n => ({ ...n, sample_url: SUPBASE.storage.from(BUCKET).getPublicUrl(n.sample_path).data.publicUrl }))
+      .map(n => ({ ...n, sample_url: supabase.storage.from(BUCKET).getPublicUrl(n.sample_path).data.publicUrl }))
       .sort((a, b) => b.count - a.count);
 
     return res.status(200).json({ directory });
