@@ -7,12 +7,6 @@
 import { createClient } from '@supabase/supabase-js';
 import Stripe from 'stripe';
 
-const supabase = createClient(
-  process.env.supabase_URL,
-  process.env.supabase_SERVICE_ROLE_KEY
-);
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -25,6 +19,16 @@ export default async function handler(req, res) {
   }
 
   try {
+    const missing = [];
+    if (!process.env.SUPBASE_URL) missing.push('SUPBASE_URL');
+    if (!process.env.SUPBASE_SERVICE_ROLE_KEY) missing.push('SUPBASE_SERVICE_ROLE_KEY');
+    if (!process.env.STRIPE_SECRET_KEY) missing.push('STRIPE_SECRET_KEY');
+    if (missing.length) {
+      return res.status(500).json({ error: `Missing environment variable(s): ${missing.join(', ')}` });
+    }
+    const supabase = createClient(process.env.SUPBASE_URL, process.env.SUPBASE_SERVICE_ROLE_KEY);
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
     const { userId, email } = req.body;
     if (!userId) return res.status(400).json({ error: 'userId is required' });
 
