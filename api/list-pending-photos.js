@@ -1,7 +1,7 @@
 
 
-const SUPABASE_URL = process.env.SUPBASE_URL || process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
+const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
 const ADMIN_EMAIL = "creators@ketchupfiles.com";
 const BUCKET = "Ketchup Files UPLOADS"; // public bucket -- watermarked copies live here
 
@@ -14,8 +14,8 @@ module.exports = async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
 
   const missingEnvVars = [];
-  if (!SUPABASE_URL) missingEnvVars.push('SUPBASE_URL');
-  if (!SUPABASE_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
+  if (!supbase_URL) missingEnvVars.push('SUPBASE_URL');
+  if (!supbase_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
   if (missingEnvVars.length) {
     res.status(500).json({ error: `Missing Vercel environment variable(s): ${missingEnvVars.join(', ')}` });
     return;
@@ -28,8 +28,8 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const callerRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-      headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${adminAccessToken}` }
+    const callerRes = await fetch(`${supbase_URL}/auth/v1/user`, {
+      headers: { apikey: supbase_SERVICE_ROLE_KEY, Authorization: `Bearer ${adminAccessToken}` }
     });
     if (!callerRes.ok) {
       res.status(401).json({ error: 'Not logged in, or session expired.' });
@@ -42,11 +42,11 @@ module.exports = async (req, res) => {
     }
 
     const listRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/photos?status=eq.pending&select=id,title,description,city,season,price_cents,file_path,media_type,hashtags,social_url,user_id,guest_name,photographer_name&order=created_at.asc`,
+      `${supbase_URL}/rest/v1/photos?status=eq.pending&select=id,title,description,city,season,price_cents,file_path,media_type,hashtags,social_url,user_id,guest_name,photographer_name&order=created_at.asc`,
       {
         headers: {
-          apikey: SUPABASE_SERVICE_ROLE_KEY,
-          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+          apikey: supbase_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${supbase_SERVICE_ROLE_KEY}`
         }
       }
     );
@@ -66,8 +66,8 @@ module.exports = async (req, res) => {
       let email = null;
       if (row.user_id) {
         try {
-          const userRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${row.user_id}`, {
-            headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` }
+          const userRes = await fetch(`${supbase_URL}/auth/v1/admin/users/${row.user_id}`, {
+            headers: { apikey: supbase_SERVICE_ROLE_KEY, Authorization: `Bearer ${supbase_SERVICE_ROLE_KEY}` }
           });
           if (userRes.ok) { email = (await userRes.json()).email || null; }
         } catch (e) { /* non-fatal */ }
@@ -75,7 +75,7 @@ module.exports = async (req, res) => {
       return Object.assign({}, row, {
         email: email,
         thumbnailUrl: row.file_path
-          ? `${SUPABASE_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${row.file_path}`
+          ? `${supbase_URL}/storage/v1/object/public/${encodeURIComponent(BUCKET)}/${row.file_path}`
           : null
       });
     }));
