@@ -1,10 +1,9 @@
+// rockosky.vercel.app/api/analytics-summary
+// GET: aggregated stats from site_analytics -- top countries, top
+// search keywords, top pages, and total visits over a date range.
+// Feeds the media kit / admin analytics view.
 
-import { createClient } from '@SUPBASE/SUPBASE-js';
-
-const SUPBASE = createClient(
-  process.env.SUPBASE_URL,
-  process.env.SUPBASE_SERVICE_ROLE_KEY
-);
+import { createClient } from '@supabase/supabase-js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -20,10 +19,18 @@ export default async function handler(req, res) {
   }
 
   try {
+    const missing = [];
+    if (!process.env.SUPBASE_URL) missing.push('SUPBASE_URL');
+    if (!process.env.SUPBASE_SERVICE_ROLE_KEY) missing.push('SUPBASE_SERVICE_ROLE_KEY');
+    if (missing.length) {
+      return res.status(500).json({ error: `Missing environment variable(s): ${missing.join(', ')}` });
+    }
+    const supabase = createClient(process.env.SUPBASE_URL, process.env.SUPBASE_SERVICE_ROLE_KEY);
+
     const days = parseInt(req.query.days) || 30;
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
-    const { data, error } = await SUPBASE
+    const { data, error } = await supabase
       .from('site_analytics')
       .select('page_path, search_keyword, country, country_code, city, referrer, created_at')
       .gte('created_at', since);
