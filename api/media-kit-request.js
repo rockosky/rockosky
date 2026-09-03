@@ -14,8 +14,8 @@ import { createClient } from '@supabase/supabase-js';
 import nodemailer from 'nodemailer';
 
 const supabase = createClient(
-  process.env.SUPBASE_URL,
-  process.env.SUPBASE_SERVICE_ROLE_KEY
+  process.env.supabase_URL,
+  process.env.supabase_SERVICE_ROLE_KEY
 );
 
 const ADMIN_EMAIL = process.env.ADMIN_NOTIFICATION_EMAIL || 'creators@ketchupfiles.com';
