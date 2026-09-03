@@ -1,7 +1,7 @@
 
 
-const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
-const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
+const supabase_URL = process.env.supabase_URL || process.env.supabase_URL;
+const supabase_SERVICE_ROLE_KEY = process.env.supabase_SERVICE_ROLE_KEY || process.env.supabase_SERVICE_ROLE_KEY;
 const ADMIN_EMAIL = "creators@ketchupfiles.com";
 
 module.exports = async (req, res) => {
@@ -16,8 +16,8 @@ module.exports = async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
 
   const missingEnvVars = [];
-  if (!supbase_URL) missingEnvVars.push('SUPBASE_URL');
-  if (!supbase_SERVICE_ROLE_KEY) missingEnvVars.push('SUPBASE_SERVICE_ROLE_KEY');
+  if (!supabase_URL) missingEnvVars.push('supabase_URL');
+  if (!supabase_SERVICE_ROLE_KEY) missingEnvVars.push('supabase_SERVICE_ROLE_KEY');
   if (missingEnvVars.length) {
     res.status(500).json({ error: `Missing Vercel environment variable(s): ${missingEnvVars.join(', ')}` });
     return;
@@ -38,8 +38,8 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const callerRes = await fetch(`${supbase_URL}/auth/v1/user`, {
-      headers: { apikey: supbase_SERVICE_ROLE_KEY, Authorization: `Bearer ${adminAccessToken}` }
+    const callerRes = await fetch(`${supabase_URL}/auth/v1/user`, {
+      headers: { apikey: supabase_SERVICE_ROLE_KEY, Authorization: `Bearer ${adminAccessToken}` }
     });
     if (!callerRes.ok) {
       res.status(401).json({ error: 'Not logged in, or session expired.' });
@@ -53,7 +53,7 @@ module.exports = async (req, res) => {
 
     if (action === 'list') {
       const listRes = await fetch(
-        `${supbase_URL}/rest/v1/photos?status=eq.pending&select=id,title,city,season,price_cents,file_path,device_type,created_at&order=created_at.asc&limit=50`,
+        `${supabase_URL}/rest/v1/photos?status=eq.pending&select=id,title,city,season,price_cents,file_path,device_type,created_at&order=created_at.asc&limit=50`,
         { headers: serviceHeaders() }
       );
       if (!listRes.ok) {
@@ -66,7 +66,7 @@ module.exports = async (req, res) => {
     }
 
     if (action === 'delete') {
-      const deleteRes = await fetch(`${supbase_URL}/rest/v1/photos?id=eq.${encodeURIComponent(photoId)}`, {
+      const deleteRes = await fetch(`${supabase_URL}/rest/v1/photos?id=eq.${encodeURIComponent(photoId)}`, {
         method: 'DELETE',
         headers: serviceHeaders()
       });
@@ -80,7 +80,7 @@ module.exports = async (req, res) => {
     }
 
     // reject
-    const updateRes = await fetch(`${supbase_URL}/rest/v1/photos?id=eq.${encodeURIComponent(photoId)}`, {
+    const updateRes = await fetch(`${supabase_URL}/rest/v1/photos?id=eq.${encodeURIComponent(photoId)}`, {
       method: 'PATCH',
       headers: { ...serviceHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
       body: JSON.stringify({ status: 'rejected', rejection_reason: rejectionReason || null })
@@ -104,7 +104,7 @@ module.exports = async (req, res) => {
 
 function serviceHeaders() {
   return {
-    apikey: supbase_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${supbase_SERVICE_ROLE_KEY}`
+    apikey: supabase_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${supabase_SERVICE_ROLE_KEY}`
   };
 }
