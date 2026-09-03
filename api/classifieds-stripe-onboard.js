@@ -3,14 +3,6 @@
 import { createClient } from '@supabase/supabase-js';
 import Stripe from 'stripe';
 
-const supabase = createClient(
-  process.env.supabase_URL,
-  process.env.supabase_SERVICE_ROLE_KEY
-);
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-
-const SITE_URL = process.env.SITE_URL || 'https://www.ketchupfiles.com';
-
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -23,7 +15,20 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { sellerId, email } = req.body;
+    // ---- Defensive env var checks, with a specific message for each ----
+    const missing = [];
+    if (!process.env.SUPBASE_URL) missing.push('SUPBASE_URL');
+    if (!process.env.SUPBASE_SERVICE_ROLE_KEY) missing.push('SUPBASE_SERVICE_ROLE_KEY');
+    if (!process.env.STRIPE_SECRET_KEY) missing.push('STRIPE_SECRET_KEY');
+    if (missing.length) {
+      return res.status(500).json({ error: `Missing environment variable(s): ${missing.join(', ')}` });
+    }
+
+    const supabase = createClient(process.env.SUPBASE_URL, process.env.SUPBASE_SERVICE_ROLE_KEY);
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+    const SITE_URL = process.env.SITE_URL || 'https://www.ketchupfiles.com';
+
+    const { sellerId, email } = req.body || {};
     if (!sellerId) return res.status(400).json({ error: 'sellerId is required' });
 
     const { data: seller, error: sellerErr } = await supabase
@@ -31,7 +36,7 @@ export default async function handler(req, res) {
       .select('stripe_account_id')
       .eq('user_id', sellerId)
       .maybeSingle();
-    if (sellerErr) throw sellerErr;
+    if (sellerErr) throw new Error(`Supabase lookup failed: ${sellerErr.message}`);
 
     let accountId = seller && seller.stripe_account_id;
 
@@ -46,9 +51,10 @@ export default async function handler(req, res) {
       });
       accountId = account.id;
 
-      await supabase.from('classifieds_sellers')
+      const { error: updateErr } = await supabase.from('classifieds_sellers')
         .update({ stripe_account_id: accountId })
         .eq('user_id', sellerId);
+      if (updateErr) throw new Error(`Supabase update failed: ${updateErr.message}`);
     }
 
     const accountLink = await stripe.accountLinks.create({
@@ -60,7 +66,10 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ ok: true, onboardingUrl: accountLink.url });
   } catch (err) {
+    // Stripe errors carry extra detail worth surfacing -- include the
+    // Stripe-specific message/type if present, not just err.message.
+    const detail = err.raw ? (err.raw.message || err.message) : err.message;
     console.error('classifieds-stripe-onboard error:', err);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: detail || 'Unknown error', type: err.type || null });
   }
 }
