@@ -1,8 +1,8 @@
-import { createClient } from '@SUPBASE/SUPBASE-js';
+import { createClient } from '@supabase/supabase-js';
 
-const SUPBASE = createClient(
-  process.env.SUPBASE_URL,
-  process.env.SUPBASE_SERVICE_ROLE_KEY
+const supabase = createClient(
+  process.env.supabase_URL,
+  process.env.supabase_SERVICE_ROLE_KEY
 );
 
 const BUCKET = 'Ketchup Files UPLOADS';
@@ -29,10 +29,10 @@ export default async function handler(req, res) {
       const ext = String(name).split('.').pop().toLowerCase() || 'jpg';
       const path = `contest/${contest_slug}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
 
-      const { data, error } = await SUPBASE.storage.from(BUCKET).createSignedUploadUrl(path);
+      const { data, error } = await supabase.storage.from(BUCKET).createSignedUploadUrl(path);
       if (error) throw error;
 
-      const { data: pub } = SUPBASE.storage.from(BUCKET).getPublicUrl(path);
+      const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(path);
       slots.push({ path: data.path, token: data.token, publicUrl: pub.publicUrl });
     }
 
