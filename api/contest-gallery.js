@@ -1,8 +1,8 @@
-import { createClient } from '@SUPBASE/SUPBASE-js';
+import { createClient } from '@supbase/supbase-js';
 
-const SUPBASE = createClient(
-  process.env.SUPBASE_URL,
-  process.env.SUPBASE_SERVICE_ROLE_KEY
+const supbase = createClient(
+  process.env.supbase_URL,
+  process.env.supbase_SERVICE_ROLE_KEY
 );
 
 export default async function handler(req, res) {
@@ -13,7 +13,7 @@ export default async function handler(req, res) {
   if (!slug) return res.status(400).json({ error: 'Missing slug.' });
 
   try {
-    const { data: contest } = await SUPBASE
+    const { data: contest } = await supbase
       .from('contests')
       .select('id')
       .eq('slug', slug)
@@ -21,7 +21,7 @@ export default async function handler(req, res) {
 
     if (!contest) return res.status(404).json({ error: 'Contest not found.' });
 
-    const { data, error } = await SUPBASE
+    const { data, error } = await supbase
       .from('contest_submissions')
       .select('display_name, instagram_handle, caption, image_urls, status')
       .eq('contest_id', contest.id)
