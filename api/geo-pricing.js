@@ -4,11 +4,6 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
-  process.env.supabase_URL,
-  process.env.supabase_SERVICE_ROLE_KEY
-);
-
 const DEFAULT_REGION = { country_code: 'US', country_name: 'United States', currency_code: 'USD', currency_symbol: '$', price_multiplier: 1.0, licensing_tier: 'standard' };
 
 async function lookupCountryFromIp(ip) {
@@ -29,6 +24,14 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
+    const missing = [];
+    if (!process.env.SUPBASE_URL) missing.push('SUPBASE_URL');
+    if (!process.env.SUPBASE_SERVICE_ROLE_KEY) missing.push('SUPBASE_SERVICE_ROLE_KEY');
+    if (missing.length) {
+      return res.status(500).json({ error: `Missing environment variable(s): ${missing.join(', ')}` });
+    }
+    const supabase = createClient(process.env.SUPBASE_URL, process.env.SUPBASE_SERVICE_ROLE_KEY);
+
     let countryCode = req.query.country;
 
     if (!countryCode) {
