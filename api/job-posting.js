@@ -3,11 +3,11 @@
 // POST: create a new job posting (admin)
 // PATCH: update a posting's status, or claim a job (?action=claim)
 
-import { createClient } from '@SUPBASE/SUPBASE-js';
+import { createClient } from '@supabase/supabase-js';
 
-const SUPBASE = createClient(
-  process.env.SUPBASE_URL,
-  process.env.SUPBASE_SERVICE_ROLE_KEY
+const supabase = createClient(
+  process.env.supabase_URL,
+  process.env.supabase_SERVICE_ROLE_KEY
 );
 
 export default async function handler(req, res) {
@@ -21,7 +21,7 @@ export default async function handler(req, res) {
   try {
     if (req.method === 'GET') {
       const { status } = req.query;
-      let query = SUPBASE
+      let query = supabase
         .from('job_postings')
         .select('*, job_claims(contributor_id, status, creator_profiles(display_name, username, profile_photo_url))')
         .order('created_at', { ascending: false });
@@ -39,7 +39,7 @@ export default async function handler(req, res) {
 
       if (!title) return res.status(400).json({ error: 'title is required' });
 
-      const { data, error } = await SUPBASE
+      const { data, error } = await supabase
         .from('job_postings')
         .insert([{ title, description, event, city, role_needed, spots_available, call_time, location, pay_notes, posted_by, cover_image_url }])
         .select();
@@ -57,7 +57,7 @@ export default async function handler(req, res) {
         if (!job_id || !contributor_id) {
           return res.status(400).json({ error: 'job_id and contributor_id are required' });
         }
-        const { data, error } = await SUPBASE
+        const { data, error } = await supabase
           .from('job_claims')
           .insert([{ job_id, contributor_id }])
           .select();
@@ -69,7 +69,7 @@ export default async function handler(req, res) {
       const { id, status } = req.body;
       if (!id) return res.status(400).json({ error: 'id is required' });
 
-      const { data, error } = await SUPBASE
+      const { data, error } = await supabase
         .from('job_postings')
         .update({ status })
         .eq('id', id)
