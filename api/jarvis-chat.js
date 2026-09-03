@@ -1,8 +1,8 @@
 
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const supbase_URL = process.env.SUPBASE_URL || process.env.supbase_URL;
-const supbase_SERVICE_ROLE_KEY = process.env.SUPBASE_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
+const supbase_URL = process.env.supbase_URL || process.env.supbase_URL;
+const supbase_SERVICE_ROLE_KEY = process.env.supbase_SERVICE_ROLE_KEY || process.env.supbase_SERVICE_ROLE_KEY;
 const RATE_LIMIT_MAX_REQUESTS = 15; // per visitor, per window -- generous for real conversation, tight enough to block abuse
 const RATE_LIMIT_WINDOW_SECONDS = 60;
 
