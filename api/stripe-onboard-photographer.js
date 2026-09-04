@@ -1,124 +1,70 @@
+// rockosky.vercel.app/api/stripe-onboard-photographer
+// POST: create (or resume) a Stripe Connect Express account for a
+// Ketchup Files contributor, and return the onboarding URL to send
+// them to. Same pattern as classifieds-stripe-onboard.js, applied to
+// creator_profiles instead of classifieds_sellers.
 
+import { createClient } from '@supabase/supabase-js';
+import Stripe from 'stripe';
 
-const supabase_URL = process.env.supabase_URL || process.env.supabase_URL;
-const supabase_SERVICE_ROLE_KEY = process.env.supabase_SERVICE_ROLE_KEY || process.env.supabase_SERVICE_ROLE_KEY;
-const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
-const RETURN_URL = 'https://www.ketchupfiles.com/chat?stripe=return';
-const REFRESH_URL = 'https://www.ketchupfiles.com/chat?stripe=refresh';
+const supabase = createClient(
+  process.env.SUPBASE_URL,
+  process.env.SUPBASE_SERVICE_ROLE_KEY
+);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-module.exports = async (req, res) => {
+const SITE_URL = process.env.SITE_URL || 'https://www.ketchupfiles.com';
+
+export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
-  if (req.method === 'OPTIONS') { res.status(204).end(); return; }
-  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
-
-  const missingEnvVars = [];
-  if (!supabase_URL) missingEnvVars.push('supabase_URL');
-  if (!supabase_SERVICE_ROLE_KEY) missingEnvVars.push('supabase_SERVICE_ROLE_KEY');
-  if (!STRIPE_SECRET_KEY) missingEnvVars.push('STRIPE_SECRET_KEY');
-  if (missingEnvVars.length) {
-    res.status(500).json({ error: `Missing Vercel environment variable(s): ${missingEnvVars.join(', ')}` });
-    return;
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', ['POST']);
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
   }
 
   try {
-    const { photographerId, email } = req.body || {};
-    if (!photographerId || !email) {
-      res.status(400).json({ ok: false, error: 'photographerId and email are both required.' });
-      return;
-    }
+    const { photographerId, email } = req.body;
+    if (!photographerId) return res.status(400).json({ error: 'photographerId is required' });
 
-    // Check if this photographer already has a Stripe account on file --
-    // reuse it instead of creating a duplicate every time they click the button.
-    const profileRes = await fetch(
-      `${supabase_URL}/rest/v1/creator_profiles?user_id=eq.${encodeURIComponent(photographerId)}&select=stripe_account_id`,
-      { headers: supabaseHeaders() }
-    );
-    const profiles = await profileRes.json();
-    let stripeAccountId = (Array.isArray(profiles) && profiles[0] && profiles[0].stripe_account_id) || null;
+    const { data: contributor, error: contributorErr } = await supabase
+      .from('creator_profiles')
+      .select('stripe_account_id')
+      .eq('user_id', photographerId)
+      .maybeSingle();
+    if (contributorErr) throw contributorErr;
 
-    if (!stripeAccountId) {
-      const account = await stripeRequest('POST', '/v1/accounts', {
+    let accountId = contributor && contributor.stripe_account_id;
+
+    if (!accountId) {
+      const account = await stripe.accounts.create({
         type: 'express',
-        email: email,
+        email: email || undefined,
         capabilities: {
-          'card_payments': { requested: 'true' },
-          'transfers': { requested: 'true' }
+          card_payments: { requested: true },
+          transfers: { requested: true }
         }
       });
-      if (account.error) {
-        res.status(500).json({ ok: false, error: account.error.message || 'Could not create Stripe account.' });
-        return;
-      }
-      stripeAccountId = account.id;
+      accountId = account.id;
 
-      const updateRes = await fetch(
-        `${supabase_URL}/rest/v1/creator_profiles?user_id=eq.${encodeURIComponent(photographerId)}`,
-        {
-          method: 'PATCH',
-          headers: { ...supabaseHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
-          body: JSON.stringify({ stripe_account_id: stripeAccountId })
-        }
-      );
-      if (!updateRes.ok) {
-        console.error('stripe-onboard-photographer: failed to save stripe_account_id:', await updateRes.text());
-      }
+      await supabase.from('creator_profiles')
+        .update({ stripe_account_id: accountId })
+        .eq('user_id', photographerId);
     }
 
-    // Generate a fresh onboarding link every time -- these expire quickly,
-    // so we never store/reuse the link itself, only the underlying account id.
-    const link = await stripeRequest('POST', '/v1/account_links', {
-      account: stripeAccountId,
-      refresh_url: REFRESH_URL,
-      return_url: RETURN_URL,
+    const accountLink = await stripe.accountLinks.create({
+      account: accountId,
+      refresh_url: `${SITE_URL}?stripe_refresh=1`,
+      return_url: `${SITE_URL}?stripe_return=1`,
       type: 'account_onboarding'
     });
-    if (link.error) {
-      res.status(500).json({ ok: false, error: link.error.message || 'Could not create onboarding link.' });
-      return;
-    }
 
-    res.status(200).json({ ok: true, onboardingUrl: link.url, stripeAccountId });
+    return res.status(200).json({ ok: true, onboardingUrl: accountLink.url });
   } catch (err) {
-    console.error('stripe-onboard-photographer failed:', err);
-    res.status(500).json({ ok: false, error: 'Could not start Stripe onboarding -- check logs.' });
+    console.error('stripe-onboard-photographer error:', err);
+    return res.status(500).json({ error: err.message });
   }
-};
-
-// Stripe's API takes form-encoded bodies, not JSON -- this flattens a
-// (possibly nested) object into the x-www-form-urlencoded format Stripe expects.
-async function stripeRequest(method, path, params) {
-  const body = new URLSearchParams();
-  flattenParams(params, '', body);
-
-  const res = await fetch(`https://api.stripe.com${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
-      'Content-Type': 'application/x-www-form-urlencoded'
-    },
-    body: body.toString()
-  });
-  return res.json();
-}
-
-function flattenParams(obj, prefix, body) {
-  Object.keys(obj).forEach((key) => {
-    const value = obj[key];
-    const paramKey = prefix ? `${prefix}[${key}]` : key;
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
-      flattenParams(value, paramKey, body);
-    } else {
-      body.append(paramKey, value);
-    }
-  });
-}
-
-function supabaseHeaders() {
-  return {
-    apikey: supabase_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${supabase_SERVICE_ROLE_KEY}`
-  };
 }
