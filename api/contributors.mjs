@@ -5,6 +5,11 @@
 
 import { createClient } from '@supabase/supabase-js';
 
+const supabase = createClient(
+  process.env.SUPBASE_URL,
+  process.env.SUPBASE_SERVICE_ROLE_KEY
+);
+
 const BUCKET = "Ketchup Files UPLOADS";
 const THUMBS_PER_CONTRIBUTOR = 4;
 
@@ -21,14 +26,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    const missing = [];
-    if (!process.env.SUPBASE_URL) missing.push('SUPBASE_URL');
-    if (!process.env.SUPBASE_SERVICE_ROLE_KEY) missing.push('SUPBASE_SERVICE_ROLE_KEY');
-    if (missing.length) {
-      return res.status(500).json({ error: `Missing environment variable(s): ${missing.join(', ')}` });
-    }
-    const supabase = createClient(process.env.SUPBASE_URL, process.env.SUPBASE_SERVICE_ROLE_KEY);
-
     if (req.method === 'PATCH') {
       const { user_id, roster_status, chat_approved } = req.body;
       const VALID_STATUSES = ['pending', 'active', 'inactive', 'alumni'];
@@ -66,7 +63,7 @@ export default async function handler(req, res) {
     const { status } = req.query;
     let query = supabase
       .from('creator_profiles')
-      .select('user_id, display_name, username, roster_status, contributor_type, roster_city, chat_approved, profile_photo_url')
+      .select('user_id, display_name, username, roster_status, contributor_type, roster_city, chat_approved, profile_photo_url, stripe_account_id')
       .order('display_name', { ascending: true });
 
     if (status) query = query.eq('roster_status', status);
@@ -98,7 +95,10 @@ export default async function handler(req, res) {
     const enriched = contributors.map(c => ({
       ...c,
       photos: photosByUser[c.user_id] || [],
-      photo_count: (photosByUser[c.user_id] || []).length
+      photo_count: (photosByUser[c.user_id] || []).length,
+      // Presence of a Stripe account id is treated as "connected" --
+      // same convention used for classifieds_sellers elsewhere.
+      payout_connected: !!c.stripe_account_id
     }));
 
     return res.status(200).json({ contributors: enriched });
