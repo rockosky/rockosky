@@ -1,16 +1,19 @@
 // rockosky.vercel.app/api/classifieds-stripe-onboard
 // POST: create (or resume) a Stripe Connect Express account for a
 // classifieds seller, and return the onboarding URL to send them to.
-//
-// NOTE: client setup (Stripe + Supabase) is done INSIDE the handler,
-// wrapped in try/catch -- not at module top-level like other files in
-// this project. If something is misconfigured (a missing env var, a
-// malformed key), this makes the function return a real JSON error
-// message you can read in the browser, instead of crashing before
-// any of our own error handling gets a chance to run.
+// Same pattern as stripe-onboard-photographer.js, applied to
+// classifieds_sellers instead.
 
 import { createClient } from '@supabase/supabase-js';
 import Stripe from 'stripe';
+
+const supabase = createClient(
+  process.env.SUPBASE_URL,
+  process.env.SUPBASE_SERVICE_ROLE_KEY
+);
+const stripe = new Stripe(process.env.STRIPE_SECRET_API_KEY);
+
+const SITE_URL = process.env.SITE_URL || 'https://www.ketchupfiles.com';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -24,20 +27,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    // ---- Defensive env var checks, with a specific message for each ----
-    const missing = [];
-    if (!process.env.SUPBASE_URL) missing.push('SUPBASE_URL');
-    if (!process.env.SUPBASE_SERVICE_ROLE_KEY) missing.push('SUPBASE_SERVICE_ROLE_KEY');
-    if (!process.env.STRIPE_SECRET_KEY) missing.push('STRIPE_SECRET_KEY');
-    if (missing.length) {
-      return res.status(500).json({ error: `Missing environment variable(s): ${missing.join(', ')}` });
-    }
-
-    const supabase = createClient(process.env.SUPBASE_URL, process.env.SUPBASE_SERVICE_ROLE_KEY);
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-    const SITE_URL = process.env.SITE_URL || 'https://www.ketchupfiles.com';
-
-    const { sellerId, email } = req.body || {};
+    const { sellerId, email } = req.body;
     if (!sellerId) return res.status(400).json({ error: 'sellerId is required' });
 
     const { data: seller, error: sellerErr } = await supabase
@@ -45,7 +35,7 @@ export default async function handler(req, res) {
       .select('stripe_account_id')
       .eq('user_id', sellerId)
       .maybeSingle();
-    if (sellerErr) throw new Error(`Supabase lookup failed: ${sellerErr.message}`);
+    if (sellerErr) throw sellerErr;
 
     let accountId = seller && seller.stripe_account_id;
 
@@ -60,10 +50,9 @@ export default async function handler(req, res) {
       });
       accountId = account.id;
 
-      const { error: updateErr } = await supabase.from('classifieds_sellers')
+      await supabase.from('classifieds_sellers')
         .update({ stripe_account_id: accountId })
         .eq('user_id', sellerId);
-      if (updateErr) throw new Error(`Supabase update failed: ${updateErr.message}`);
     }
 
     const accountLink = await stripe.accountLinks.create({
@@ -75,10 +64,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ ok: true, onboardingUrl: accountLink.url });
   } catch (err) {
-    // Stripe errors carry extra detail worth surfacing -- include the
-    // Stripe-specific message/type if present, not just err.message.
-    const detail = err.raw ? (err.raw.message || err.message) : err.message;
     console.error('classifieds-stripe-onboard error:', err);
-    return res.status(500).json({ error: detail || 'Unknown error', type: err.type || null });
+    return res.status(500).json({ error: err.message });
   }
 }
