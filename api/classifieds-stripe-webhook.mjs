@@ -63,20 +63,50 @@ export default async function handler(req, res) {
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
 
-      const { data: order } = await supabase
-        .from('classifieds_orders')
-        .update({
-          status: 'paid',
-          stripe_payment_intent_id: session.payment_intent || null
-        })
-        .eq('stripe_checkout_session_id', session.id)
-        .select()
-        .maybeSingle();
+      // Token purchase (White Donuts) vs. a classifieds listing
+      // purchase are two different flows sharing the same webhook
+      // event -- metadata.type tells them apart.
+      if (session.metadata && session.metadata.type === 'token_purchase') {
+        const userId = session.metadata.user_id;
+        const tokenAmount = parseInt(session.metadata.token_amount, 10) || 0;
 
-      if (order && order.listing_id) {
-        await supabase.from('classifieds_listings')
-          .update({ status: 'sold' })
-          .eq('id', order.listing_id);
+        if (userId && tokenAmount > 0) {
+          const { data: wallet } = await supabase
+            .from('wallet_balances')
+            .select('balance_tokens')
+            .eq('user_id', userId)
+            .maybeSingle();
+
+          const newBalance = (wallet ? wallet.balance_tokens : 0) + tokenAmount;
+
+          await supabase.from('wallet_balances')
+            .upsert({ user_id: userId, balance_tokens: newBalance, updated_at: new Date().toISOString() });
+
+          await supabase.from('wallet_transactions').insert({
+            user_id: userId,
+            amount_tokens: tokenAmount,
+            type: 'purchase',
+            reference_type: 'token_package',
+            reference_id: session.metadata.package_id || null,
+            stripe_checkout_session_id: session.id
+          });
+        }
+      } else {
+        const { data: order } = await supabase
+          .from('classifieds_orders')
+          .update({
+            status: 'paid',
+            stripe_payment_intent_id: session.payment_intent || null
+          })
+          .eq('stripe_checkout_session_id', session.id)
+          .select()
+          .maybeSingle();
+
+        if (order && order.listing_id) {
+          await supabase.from('classifieds_listings')
+            .update({ status: 'sold' })
+            .eq('id', order.listing_id);
+        }
       }
     }
 
