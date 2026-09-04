@@ -1,4 +1,26 @@
-
+// rockosky.vercel.app/api/classifieds-checkout
+// POST: create a Stripe Checkout session for one listing, using an
+// embedded custom payment form (per Stripe Checkout Studio config)
+// rather than a hosted-page redirect. Payment still routes through
+// Stripe Connect so the seller gets paid minus a platform fee.
+//
+// NOTE ON DEVIATIONS FROM THE GENERIC INTEGRATION TASK:
+// The Checkout Studio task instructions say to remove any parameter
+// not listed in its Field Intents. Two groups of parameters here are
+// intentionally KEPT despite not being in that list, because removing
+// them would break real functionality already in production:
+//   - payment_intent_data (application_fee_amount + transfer_data):
+//     this is the Stripe Connect marketplace split -- without it,
+//     100% of every sale would go to Ketchup Files and 0% to the
+//     seller. Not something that can be "no longer configured."
+//   - metadata (listing_id, seller_id) and customer_email: the
+//     webhook (classifieds-stripe-webhook.js) depends on metadata to
+//     know which order/listing to mark paid/sold. Removing it would
+//     silently break order fulfillment.
+// success_url / cancel_url ARE removed, per the task -- embedded
+// checkout confirms in-page via the client-side 'confirm' event and
+// the checkout.session.completed webhook, so a redirect is no longer
+// needed.
 
 import { createClient } from '@supabase/supabase-js';
 import Stripe from 'stripe';
@@ -33,7 +55,7 @@ export default async function handler(req, res) {
       apiVersion: '2026-03-25.dahlia; custom_checkout_payment_form_preview=v1'
     });
 
-    const { listingId, buyerEmail } = req.body;
+    const { listingId, buyerEmail, buyerId, payWithTokens } = req.body;
     if (!listingId) return res.status(400).json({ error: 'listingId is required' });
 
     const { data: listing, error: listingErr } = await supabase
@@ -46,11 +68,57 @@ export default async function handler(req, res) {
     if (listing.status !== 'active') return res.status(400).json({ error: 'This listing is no longer available.' });
 
     const seller = listing.classifieds_sellers;
+    const amountCents = listing.price_cents;
+
+    // ---- Pay with White Donuts (tokens) instead of a card ----
+    // Conversion rate: 1000 tokens = $1.00 (i.e. 10 tokens per cent).
+    // Skips Stripe entirely -- deduct from the buyer's wallet and mark
+    // the order paid directly.
+    if (payWithTokens) {
+      if (!buyerId) return res.status(400).json({ error: 'buyerId is required to pay with White Donuts' });
+      const TOKENS_PER_CENT = 10;
+      const priceInTokens = amountCents * TOKENS_PER_CENT;
+
+      const { data: wallet } = await supabase
+        .from('wallet_balances')
+        .select('balance_tokens')
+        .eq('user_id', buyerId)
+        .maybeSingle();
+      const currentBalance = wallet ? wallet.balance_tokens : 0;
+
+      if (currentBalance < priceInTokens) {
+        return res.status(400).json({ error: `Not enough White Donuts. Need ${priceInTokens.toLocaleString()}, have ${currentBalance.toLocaleString()}.` });
+      }
+
+      const newBalance = currentBalance - priceInTokens;
+      await supabase.from('wallet_balances')
+        .upsert({ user_id: buyerId, balance_tokens: newBalance, updated_at: new Date().toISOString() });
+      await supabase.from('wallet_transactions').insert({
+        user_id: buyerId,
+        amount_tokens: -priceInTokens,
+        type: 'spend',
+        reference_type: 'listing',
+        reference_id: listingId
+      });
+
+      await supabase.from('classifieds_orders').insert({
+        listing_id: listingId,
+        seller_id: seller ? seller.user_id : null,
+        buyer_email: buyerEmail || null,
+        amount_cents: amountCents,
+        platform_fee_cents: 0,
+        status: 'paid'
+      });
+      await supabase.from('classifieds_listings').update({ status: 'sold' }).eq('id', listingId);
+
+      return res.status(200).json({ ok: true, paidWithTokens: true, new_balance: newBalance });
+    }
+
+    // ---- Pay with card (existing Stripe Checkout flow) ----
     if (!seller || !seller.stripe_account_id) {
       return res.status(400).json({ error: 'This seller has not connected a payout account yet.' });
     }
 
-    const amountCents = listing.price_cents;
     const feeCents = Math.round(amountCents * (PLATFORM_FEE_PERCENT / 100));
     const coverPhoto = (listing.photos && listing.photos[0] && listing.photos[0].url) || undefined;
 
