@@ -11,7 +11,7 @@ const supabase = createClient(
   process.env.SUPBASE_URL,
   process.env.SUPBASE_SERVICE_ROLE_KEY
 );
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+const stripe = new Stripe(process.env.STRIPE_SECRET_API_KEY);
 
 const SITE_URL = process.env.SITE_URL || 'https://www.ketchupfiles.com';
 
