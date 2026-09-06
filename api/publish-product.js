@@ -6,6 +6,56 @@ const ADMIN_EMAIL = "creators@ketchupfiles.com";
 
 const SQUARESPACE_API_BASE = "https://api.squarespace.com/1.0";
 
+// ---- Retry-with-backoff helper -------------------------------------------
+// Squarespace's Commerce API occasionally throws a bare
+// INTERNAL_SERVER_ERROR (500) on transient hiccups (rate limiting, brief
+// outages, scope-check flakiness) that succeeds a moment later with zero
+// changes on our end. Wrapping every Squarespace call in this retries the
+// request a few times with exponential backoff before giving up, so a
+// one-off 500 no longer permanently fails a publish. It does NOT retry on
+// 4xx responses (bad request, auth, not found, etc.) since those won't
+// change on retry -- only on 5xx and network-level failures.
+function sleep(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
+async function fetchWithRetry(url, options, retryOptions) {
+  const maxAttempts = (retryOptions && retryOptions.maxAttempts) || 3;
+  const baseDelayMs = (retryOptions && retryOptions.baseDelayMs) || 500;
+  let lastError;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fetch(url, options);
+
+      // Success, or a 4xx that won't be fixed by retrying -- return as-is.
+      if (res.ok || res.status < 500) {
+        return res;
+      }
+
+      // 5xx -- worth retrying, unless this was the last attempt.
+      if (attempt < maxAttempts) {
+        const delay = baseDelayMs * Math.pow(2, attempt - 1);
+        console.warn(`Squarespace call returned ${res.status}, retrying in ${delay}ms (attempt ${attempt}/${maxAttempts}): ${url}`);
+        await sleep(delay);
+        continue;
+      }
+      return res; // exhausted retries -- let the caller handle the failed response
+    } catch (e) {
+      // Network-level failure (DNS, timeout, connection reset, etc.)
+      lastError = e;
+      if (attempt < maxAttempts) {
+        const delay = baseDelayMs * Math.pow(2, attempt - 1);
+        console.warn(`Squarespace call threw "${e.message}", retrying in ${delay}ms (attempt ${attempt}/${maxAttempts}): ${url}`);
+        await sleep(delay);
+        continue;
+      }
+      throw lastError;
+    }
+  }
+}
+// ---------------------------------------------------------------------------
+
 module.exports = async (req, res) => {
   var ALLOWED_ORIGINS = ['https://www.ketchupfiles.com', 'https://ketchupfiles.com', 'null'];
   var requestOrigin = req.headers.origin;
@@ -77,7 +127,9 @@ module.exports = async (req, res) => {
     // whose title already contains both the city and season text. If
     // that page doesn't exist yet, this fails with the full list of
     // pages that DO exist, so it's obvious what to create by hand.
-    const pagesRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/store-pages`, {
+    // Wrapped in fetchWithRetry: this was the exact call that surfaced
+    // a bare INTERNAL_SERVER_ERROR from Squarespace in production.
+    const pagesRes = await fetchWithRetry(`${SQUARESPACE_API_BASE}/commerce/store-pages`, {
       headers: squarespaceHeaders()
     });
     if (!pagesRes.ok) {
@@ -121,7 +173,7 @@ module.exports = async (req, res) => {
     let productUrl = photo.squarespace_product_url;
 
     if (!squarespaceProductId) {
-      const createRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/products`, {
+      const createRes = await fetchWithRetry(`${SQUARESPACE_API_BASE}/commerce/products`, {
         method: 'POST',
         headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -179,7 +231,7 @@ module.exports = async (req, res) => {
         const filename = (photo.file_path || 'image.jpg').split('/').pop();
         const form = new FormData();
         form.append('image', new Blob([imgBuffer], { type: contentType }), filename);
-        const imgRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/products/${squarespaceProductId}/images`, {
+        const imgRes = await fetchWithRetry(`${SQUARESPACE_API_BASE}/commerce/products/${squarespaceProductId}/images`, {
           method: 'POST',
           headers: squarespaceHeaders(),
           body: form
@@ -194,7 +246,7 @@ module.exports = async (req, res) => {
     // This was the first confirmed 405 -- was sending PUT, Squarespace's
     // API only accepts PATCH for updating an existing product's fields.
     try {
-      const visRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/products/${squarespaceProductId}`, {
+      const visRes = await fetchWithRetry(`${SQUARESPACE_API_BASE}/commerce/products/${squarespaceProductId}`, {
         method: 'PATCH',
         headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ isVisible: true })
@@ -212,7 +264,7 @@ module.exports = async (req, res) => {
     // ---- Step: SEO ----
     // Same fix as Visibility -- PUT to PATCH.
     try {
-      const seoRes = await fetch(`${SQUARESPACE_API_BASE}/commerce/products/${squarespaceProductId}`, {
+      const seoRes = await fetchWithRetry(`${SQUARESPACE_API_BASE}/commerce/products/${squarespaceProductId}`, {
         method: 'PATCH',
         headers: { ...squarespaceHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({
